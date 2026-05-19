@@ -334,8 +334,13 @@ export default function App(){
     const rows=entries.map(e=>`${e.date},${e.debit_code},${e.debit_account},${e.credit_code},${e.credit_account},${e.amount},${e.tax_rate},${e.tax_amount||0},${e.vendor},${e.description},${e.invoice_number||""}`);
     const blob=new Blob(["\uFEFF"+[h,...rows].join("\n")],{type:"text/csv;charset=utf-8;"});
     const url=URL.createObjectURL(blob);
-    Object.assign(document.createElement("a"),{href:url,download:`仕訳帳_${new Date().toISOString().slice(0,10)}.csv`}).click();
-    URL.revokeObjectURL(url);
+    const a=document.createElement("a");
+    a.href=url;
+    a.download=`仕訳帳_${new Date().toISOString().slice(0,10)}.csv`;
+    a.style.display="none";
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(()=>{document.body.removeChild(a);URL.revokeObjectURL(url);},500);
   };
 
   return(
