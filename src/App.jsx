@@ -42,6 +42,67 @@ const cardBg = "#ffffff";
 const bdr = "#dde3ea";
 function deepClone(o){return JSON.parse(JSON.stringify(o))}
 
+const isMobileDevice=()=>/iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
+function buildCSV(entries){
+  const h="日付,借方コード,借方科目,貸方コード,貸方科目,金額,税区分,消費税額,取引先,摘要,インボイス番号";
+  const rows=entries.map(e=>`${e.date},${e.debit_code},${e.debit_account},${e.credit_code},${e.credit_account},${e.amount},${e.tax_rate},${e.tax_amount||0},${e.vendor},${e.description},${e.invoice_number||""}`);
+  return"\uFEFF"+[h,...rows].join("\n");
+}
+
+async function shareOrSaveCSV(csvText,filename,onShowModal){
+  const blob=new Blob([csvText],{type:"text/csv;charset=utf-8;"});
+  const file=new File([blob],filename,{type:"text/csv"});
+  if(navigator.share&&navigator.canShare?.({files:[file]})){
+    try{
+      await navigator.share({files:[file],title:"仕訳帳CSV"});
+      return;
+    }catch(err){
+      if(err?.name==="AbortError")return;
+    }
+  }
+  if(isMobileDevice()){
+    onShowModal({csvText,filename});
+    return;
+  }
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a");
+  a.href=url;a.download=filename;a.rel="noopener";
+  document.body.appendChild(a);a.click();
+  setTimeout(()=>{document.body.removeChild(a);URL.revokeObjectURL(url);},500);
+}
+
+function CsvExportModal({csvText,filename,onClose}){
+  const[copied,setCopied]=useState(false);
+  const copy=async()=>{
+    try{
+      await navigator.clipboard.writeText(csvText);
+      setCopied(true);
+      setTimeout(()=>setCopied(false),2000);
+    }catch{
+      const ta=document.createElement("textarea");
+      ta.value=csvText;ta.style.position="fixed";ta.style.left="-9999px";
+      document.body.appendChild(ta);ta.select();document.execCommand("copy");
+      document.body.removeChild(ta);
+      setCopied(true);setTimeout(()=>setCopied(false),2000);
+    }
+  };
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:2000,display:"flex",alignItems:"flex-end",justifyContent:"center",padding:12}} onClick={onClose}>
+      <div style={{background:"#fff",borderRadius:16,width:"100%",maxWidth:480,padding:"20px 18px",boxShadow:"0 -4px 24px rgba(0,0,0,0.15)"}} onClick={e=>e.stopPropagation()}>
+        <h3 style={{margin:"0 0 8px",fontSize:16,color:accent,fontWeight:800}}>CSVを保存</h3>
+        <p style={{margin:"0 0 14px",fontSize:12,color:"#666",lineHeight:1.6}}>「コピー」を押して、メモ帳・Excel・Googleスプレッドシートに貼り付けて保存できます。</p>
+        <div style={{fontSize:11,color:"#999",marginBottom:8}}>{filename}</div>
+        <textarea readOnly value={csvText} style={{width:"100%",height:100,fontSize:10,fontFamily:"monospace",borderRadius:8,border:`1px solid ${bdr}`,padding:8,boxSizing:"border-box",resize:"none",marginBottom:14}}/>
+        <div style={{display:"flex",gap:10}}>
+          <button onClick={copy} style={{flex:1,padding:"12px 0",borderRadius:8,border:"none",background:copied?"#27ae60":accentLight,color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:font}}>{copied?"コピーしました":"コピー"}</button>
+          <button onClick={onClose} style={{padding:"12px 20px",borderRadius:8,border:`1px solid ${bdr}`,background:"#fff",color:"#666",fontSize:14,cursor:"pointer",fontFamily:font}}>閉じる</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ═══ Step Bar ═══ */
 function StepBar({current}){
   const steps=[{num:1,label:"業種を選ぶ",icon:"🏢"},{num:2,label:"領収書を取り込む",icon:"📷"},{num:3,label:"AIが仕訳を作成",icon:"🤖"},{num:4,label:"確認・保存",icon:"💾"}];
@@ -204,7 +265,7 @@ function Step4({entries,allAccounts,editingId,onEdit,onUpdate,onRemove,onExport,
       <div style={{background:cardBg,borderRadius:14,border:`1px solid ${bdr}`,overflow:"hidden",marginBottom:16}}>
         <div style={{background:"#e8f5e9",padding:"16px 24px",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
           <div><h2 style={{margin:0,fontSize:18,color:"#1b5e20",fontWeight:800}}>✅ 仕訳が完成しました！</h2><p style={{margin:"4px 0 0",fontSize:12,color:"#388e3c"}}>{entries.length}件｜合計 ¥{total.toLocaleString()}</p></div>
-          <button onClick={onExport} style={{padding:"8px 16px",borderRadius:7,border:"none",background:"#27ae60",color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:font}}>📥 CSV保存</button>
+          <button onClick={onExport} style={{padding:"8px 16px",borderRadius:7,border:"none",background:"#27ae60",color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:font}}>{isMobileDevice()?"📥 CSV保存・共有":"📥 CSV保存"}</button>
         </div>
         <div style={{padding:"10px 24px",background:"#fffbeb",fontSize:12,color:"#92400e",borderBottom:`1px solid ${bdr}`}}>💡 確度「中」「低」は要確認。✏️で修正できます。</div>
         <div style={{overflowX:"auto"}}>
@@ -298,6 +359,7 @@ export default function App(){
   const[editingId,setEditingId]=useState(null);
   const[error,setError]=useState(null);
   const[showMaster,setShowMaster]=useState(false);
+  const[csvModal,setCsvModal]=useState(null);
 
   const getMerged=k=>{const base=industries.general?.accounts||[];if(k==="general")return base;return[...(industries[k]?.accounts||[]),...base];};
 
@@ -330,22 +392,14 @@ export default function App(){
   const handleTextSubmit=async text=>{await callAPI([{type:"text",text:`以下の取引内容から仕訳を生成：\n${text}`}]);};
 
   const exportCSV=()=>{
-    const h="日付,借方コード,借方科目,貸方コード,貸方科目,金額,税区分,消費税額,取引先,摘要,インボイス番号";
-    const rows=entries.map(e=>`${e.date},${e.debit_code},${e.debit_account},${e.credit_code},${e.credit_account},${e.amount},${e.tax_rate},${e.tax_amount||0},${e.vendor},${e.description},${e.invoice_number||""}`);
-    const blob=new Blob(["\uFEFF"+[h,...rows].join("\n")],{type:"text/csv;charset=utf-8;"});
-    const url=URL.createObjectURL(blob);
-    const a=document.createElement("a");
-    a.href=url;
-    a.download=`仕訳帳_${new Date().toISOString().slice(0,10)}.csv`;
-    a.style.display="none";
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(()=>{document.body.removeChild(a);URL.revokeObjectURL(url);},500);
+    const filename=`仕訳帳_${new Date().toISOString().slice(0,10)}.csv`;
+    shareOrSaveCSV(buildCSV(entries),filename,setCsvModal);
   };
 
   return(
     <div style={{fontFamily:font,background:bg,minHeight:"100vh",padding:"20px 14px"}}>
       {showMaster&&<MasterPanel industries={industries} setIndustries={setIndustries} onClose={()=>setShowMaster(false)}/>}
+      {csvModal&&<CsvExportModal csvText={csvModal.csvText} filename={csvModal.filename} onClose={()=>setCsvModal(null)}/>}
       <div style={{maxWidth:960,margin:"0 auto"}}>
         <div style={{textAlign:"center",marginBottom:20}}>
           <h1 style={{margin:0,fontSize:22,color:accent,fontWeight:800}}>📒 AI自動仕訳システム</h1>
