@@ -42,7 +42,72 @@ const cardBg = "#ffffff";
 const bdr = "#dde3ea";
 function deepClone(o){return JSON.parse(JSON.stringify(o))}
 
+/* ═══ Plan & monthly usage limits ═══ */
+const PLAN_LIMITS={
+  free:{label:"無料プラン",limit:10},
+  light:{label:"ライトプラン",limit:50},
+  basic:{label:"ベーシックプラン",limit:150},
+};
+const USAGE_STORAGE_KEY="shiwake_user_data";
+
+function getMonthKey(){
+  const d=new Date();
+  return`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+}
+
+function loadUserData(){
+  try{
+    const raw=localStorage.getItem(USAGE_STORAGE_KEY);
+    if(raw){
+      const data=JSON.parse(raw);
+      if(!data.userId)data.userId=crypto.randomUUID();
+      if(!data.plan||!PLAN_LIMITS[data.plan])data.plan="free";
+      if(!data.usage)data.usage={};
+      return data;
+    }
+  }catch{/* ignore */}
+  return{userId:crypto.randomUUID(),plan:"free",usage:{}};
+}
+
+function saveUserData(data){
+  localStorage.setItem(USAGE_STORAGE_KEY,JSON.stringify(data));
+}
+
+function getUsageInfo(data){
+  const plan=data.plan||"free";
+  const limit=PLAN_LIMITS[plan]?.limit??10;
+  const month=getMonthKey();
+  const used=data.usage?.[month]??0;
+  return{plan,planLabel:PLAN_LIMITS[plan]?.label??"無料プラン",limit,used,remaining:Math.max(0,limit-used),month,reached:used>=limit};
+}
+
+function recordUsage(data){
+  const month=getMonthKey();
+  const next={...data,usage:{...data.usage,[month]:(data.usage?.[month]??0)+1}};
+  saveUserData(next);
+  return next;
+}
+
 const isMobileDevice=()=>/iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
+function UsageBar({usageInfo,onPlanChange}){
+  const pct=usageInfo.limit?Math.min(100,(usageInfo.used/usageInfo.limit)*100):0;
+  const barColor=usageInfo.reached?"#c62828":pct>=80?"#f57f17":"#27ae60";
+  return(
+    <div style={{background:cardBg,borderRadius:10,padding:"12px 16px",border:`1px solid ${bdr}`,maxWidth:700,margin:"0 auto 16px"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8,marginBottom:8}}>
+        <span style={{fontSize:12,fontWeight:700,color:accent}}>今月の処理枚数：{usageInfo.used} / {usageInfo.limit} 枚</span>
+        <select value={usageInfo.plan} onChange={e=>onPlanChange(e.target.value)} style={{fontSize:11,padding:"4px 8px",borderRadius:6,border:`1px solid ${bdr}`,fontFamily:font,color:"#555"}}>
+          {Object.entries(PLAN_LIMITS).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
+        </select>
+      </div>
+      <div style={{height:6,background:"#e8ecf0",borderRadius:3,overflow:"hidden"}}>
+        <div style={{height:"100%",width:`${pct}%`,background:barColor,borderRadius:3,transition:"width 0.3s"}}/>
+      </div>
+      {usageInfo.reached&&<p style={{margin:"8px 0 0",fontSize:12,color:"#c62828",fontWeight:700}}>今月の処理枚数を使い切りました</p>}
+    </div>
+  );
+}
 
 function buildCSV(entries){
   const h="日付,借方コード,借方科目,貸方コード,貸方科目,金額,税区分,消費税額,取引先,摘要,インボイス番号";
@@ -146,13 +211,17 @@ function Step1({industries,industry,setIndustry,onNext,onOpenMaster}){
   );
 }
 
+const LIMIT_MSG="今月の処理枚数を使い切りました";
+
 /* ═══ Step 2: Upload ═══ */
-function Step2Upload({onImageSelected,onTextMode,onBack}){
+function Step2Upload({onImageSelected,onTextMode,onBack,limitReached}){
   const fileRef=useRef(null);const cameraRef=useRef(null);const[dragOver,setDragOver]=useState(false);
-  const handleFile=f=>{if(!f)return;const r=new FileReader();r.onload=ev=>onImageSelected(ev.target.result,f.type);r.readAsDataURL(f);};
+  const handleFile=f=>{if(limitReached||!f)return;const r=new FileReader();r.onload=ev=>onImageSelected(ev.target.result,f.type);r.readAsDataURL(f);};
+  const blocked={opacity:limitReached?0.45:1,pointerEvents:limitReached?"none":"auto",cursor:limitReached?"not-allowed":"pointer"};
   return(
     <div style={{maxWidth:700,margin:"0 auto"}}>
-      <div style={{background:cardBg,borderRadius:14,padding:"28px 24px",border:`1px solid ${bdr}`,marginBottom:16}}>
+      {limitReached&&<div style={{background:"#fce4ec",borderRadius:10,padding:14,marginBottom:12,color:"#c62828",fontSize:13,textAlign:"center",fontWeight:700}}>{LIMIT_MSG}</div>}
+      <div style={{background:cardBg,borderRadius:14,padding:"28px 24px",border:`1px solid ${bdr}`,marginBottom:16,...blocked}}>
         <div style={{textAlign:"center",marginBottom:20}}>
           <div style={{fontSize:40,marginBottom:8}}>📷</div>
           <h2 style={{margin:0,fontSize:20,color:accent,fontWeight:800}}>ステップ２：領収書を取り込む</h2>
@@ -197,10 +266,11 @@ function Step2Upload({onImageSelected,onTextMode,onBack}){
 }
 
 /* ═══ Step 2b: Text ═══ */
-function Step2Text({onSubmit,onBack}){
+function Step2Text({onSubmit,onBack,limitReached}){
   const[text,setText]=useState("");
   return(
     <div style={{background:cardBg,borderRadius:14,padding:"28px 24px",border:`1px solid ${bdr}`,maxWidth:700,margin:"0 auto"}}>
+      {limitReached&&<div style={{background:"#fce4ec",borderRadius:10,padding:14,marginBottom:16,color:"#c62828",fontSize:13,textAlign:"center",fontWeight:700}}>{LIMIT_MSG}</div>}
       <div style={{textAlign:"center",marginBottom:20}}>
         <div style={{fontSize:40,marginBottom:8}}>✏️</div>
         <h2 style={{margin:0,fontSize:20,color:accent,fontWeight:800}}>領収書の内容を入力してください</h2>
@@ -214,17 +284,18 @@ function Step2Text({onSubmit,onBack}){
         style={{width:"100%",minHeight:140,borderRadius:10,border:`2px solid ${bdr}`,padding:14,fontSize:14,fontFamily:font,resize:"vertical",boxSizing:"border-box",lineHeight:1.8}}/>
       <div style={{display:"flex",justifyContent:"space-between",marginTop:16}}>
         <button onClick={onBack} style={{padding:"10px 20px",borderRadius:7,border:`1px solid ${bdr}`,background:"#fff",color:"#888",fontSize:13,cursor:"pointer",fontFamily:font}}>← 戻る</button>
-        <button onClick={()=>{if(text.trim())onSubmit(text);}} disabled={!text.trim()}
-          style={{padding:"12px 36px",borderRadius:8,border:"none",background:text.trim()?accentLight:"#ccc",color:"#fff",fontSize:15,fontWeight:700,cursor:text.trim()?"pointer":"default",fontFamily:font}}>🤖 AIで仕訳を作成 →</button>
+        <button onClick={()=>{if(text.trim()&&!limitReached)onSubmit(text);}} disabled={!text.trim()||limitReached}
+          style={{padding:"12px 36px",borderRadius:8,border:"none",background:text.trim()&&!limitReached?accentLight:"#ccc",color:"#fff",fontSize:15,fontWeight:700,cursor:text.trim()&&!limitReached?"pointer":"default",fontFamily:font}}>🤖 AIで仕訳を作成 →</button>
       </div>
     </div>
   );
 }
 
 /* ═══ Step 2c: Confirm Image ═══ */
-function Step2Confirm({imageData,onConfirm,onRetake}){
+function Step2Confirm({imageData,onConfirm,onRetake,limitReached}){
   return(
     <div style={{background:cardBg,borderRadius:14,padding:"28px 24px",border:`1px solid ${bdr}`,maxWidth:700,margin:"0 auto"}}>
+      {limitReached&&<div style={{background:"#fce4ec",borderRadius:10,padding:14,marginBottom:16,color:"#c62828",fontSize:13,textAlign:"center",fontWeight:700}}>{LIMIT_MSG}</div>}
       <div style={{textAlign:"center",marginBottom:16}}>
         <h2 style={{margin:0,fontSize:20,color:accent,fontWeight:800}}>この画像でよろしいですか？</h2>
         <p style={{margin:"8px 0 0",fontSize:13,color:"#888"}}>金額や日付がはっきり読めるか確認してください</p>
@@ -235,7 +306,7 @@ function Step2Confirm({imageData,onConfirm,onRetake}){
       <div style={{background:"#eff6ff",borderRadius:8,padding:12,marginBottom:16,fontSize:12,color:"#1d4ed8"}}>✅ <strong>日付</strong>・<strong>金額</strong>・<strong>店名</strong> が読めていますか？</div>
       <div style={{display:"flex",justifyContent:"space-between"}}>
         <button onClick={onRetake} style={{padding:"10px 20px",borderRadius:7,border:`1px solid ${bdr}`,background:"#fff",color:"#888",fontSize:13,cursor:"pointer",fontFamily:font}}>📷 撮り直す</button>
-        <button onClick={onConfirm} style={{padding:"12px 36px",borderRadius:8,border:"none",background:accentLight,color:"#fff",fontSize:15,fontWeight:700,cursor:"pointer",fontFamily:font}}>🤖 AIで仕訳を作成 →</button>
+        <button onClick={onConfirm} disabled={limitReached} style={{padding:"12px 36px",borderRadius:8,border:"none",background:limitReached?"#ccc":accentLight,color:"#fff",fontSize:15,fontWeight:700,cursor:limitReached?"default":"pointer",fontFamily:font}}>🤖 AIで仕訳を作成 →</button>
       </div>
     </div>
   );
@@ -257,7 +328,7 @@ function Step3({industryLabel}){
 }
 
 /* ═══ Step 4: Results ═══ */
-function Step4({entries,allAccounts,editingId,onEdit,onUpdate,onRemove,onExport,onAddMore,onReset}){
+function Step4({entries,allAccounts,editingId,onEdit,onUpdate,onRemove,onExport,onAddMore,onReset,limitReached}){
   const total=entries.reduce((s,e)=>s+(Number(e.amount)||0),0);
   const Conf=({level})=>{const m={high:{bg:"#e8f5e9",c:"#2e7d32",l:"高"},medium:{bg:"#fff8e1",c:"#f57f17",l:"中"},low:{bg:"#fce4ec",c:"#c62828",l:"低"}};const s=m[level]||m.low;return<span style={{background:s.bg,color:s.c,padding:"3px 10px",borderRadius:20,fontSize:11,fontWeight:700}}>確度:{s.l}</span>;};
   return(
@@ -299,7 +370,7 @@ function Step4({entries,allAccounts,editingId,onEdit,onUpdate,onRemove,onExport,
         )}
       </div>
       <div style={{display:"flex",justifyContent:"center",gap:12}}>
-        <button onClick={onAddMore} style={{padding:"12px 28px",borderRadius:8,border:`2px solid ${accentLight}`,background:"#fff",color:accentLight,fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:font}}>📷 次の領収書を取り込む</button>
+        <button onClick={onAddMore} disabled={limitReached} style={{padding:"12px 28px",borderRadius:8,border:`2px solid ${limitReached?"#ccc":accentLight}`,background:"#fff",color:limitReached?"#ccc":accentLight,fontSize:14,fontWeight:700,cursor:limitReached?"default":"pointer",fontFamily:font}}>📷 次の領収書を取り込む</button>
         <button onClick={onReset} style={{padding:"12px 28px",borderRadius:8,border:`1px solid ${bdr}`,background:"#fff",color:"#888",fontSize:14,cursor:"pointer",fontFamily:font}}>🔄 最初からやり直す</button>
       </div>
     </div>
@@ -360,6 +431,14 @@ export default function App(){
   const[error,setError]=useState(null);
   const[showMaster,setShowMaster]=useState(false);
   const[csvModal,setCsvModal]=useState(null);
+  const[userData,setUserData]=useState(()=>loadUserData());
+  const usageInfo=getUsageInfo(userData);
+
+  const handlePlanChange=plan=>{
+    const next={...userData,plan};
+    saveUserData(next);
+    setUserData(next);
+  };
 
   const getMerged=k=>{const base=industries.general?.accounts||[];if(k==="general")return base;return[...(industries[k]?.accounts||[]),...base];};
 
@@ -371,6 +450,12 @@ export default function App(){
 
   // ★ サーバー経由でAPI呼出し（APIキーはサーバー側で管理）
   const callAPI=async content=>{
+    if(getUsageInfo(userData).reached){
+      setError(LIMIT_MSG);
+      setStep(2);
+      setSubMode(null);
+      return;
+    }
     setStep(3);setError(null);
     try{
       const res=await fetch('/api/chat',{
@@ -383,6 +468,7 @@ export default function App(){
       const text=data.content.filter(b=>b.type==='text').map(b=>b.text).join('');
       const parsed=JSON.parse(text.replace(/```json|```/g,'').trim());
       if(parsed.entries?.length)setEntries(prev=>[...prev,...parsed.entries.map((e,i)=>({...e,id:Date.now()+i}))]);
+      setUserData(prev=>recordUsage(prev));
       setStep(4);
     }catch(err){setError(err.message);setStep(2);setSubMode(null);}
   };
@@ -406,13 +492,14 @@ export default function App(){
           <p style={{margin:"4px 0 0",fontSize:12,color:"#999"}}>領収書を取り込むだけで、AIが自動で仕訳帳を作成します</p>
         </div>
         <StepBar current={step}/>
-        {error&&<div style={{background:"#fce4ec",borderRadius:10,padding:14,marginBottom:16,color:"#c62828",fontSize:13,textAlign:"center",maxWidth:700,margin:"0 auto 16px"}}>⚠️ {error}<br/><span style={{fontSize:12}}>もう一度お試しください</span></div>}
+        <UsageBar usageInfo={usageInfo} onPlanChange={handlePlanChange}/>
+        {error&&<div style={{background:"#fce4ec",borderRadius:10,padding:14,marginBottom:16,color:"#c62828",fontSize:13,textAlign:"center",maxWidth:700,margin:"0 auto 16px"}}>⚠️ {error}{error!==LIMIT_MSG&&<><br/><span style={{fontSize:12}}>もう一度お試しください</span></>}</div>}
         {step===1&&<Step1 industries={industries} industry={industry} setIndustry={setIndustry} onNext={()=>{setStep(2);setSubMode(null);}} onOpenMaster={()=>setShowMaster(true)}/>}
-        {step===2&&!subMode&&<Step2Upload onImageSelected={handleImageSelected} onTextMode={()=>setSubMode("text")} onBack={()=>setStep(1)}/>}
-        {step===2&&subMode==="text"&&<Step2Text onSubmit={handleTextSubmit} onBack={()=>setSubMode(null)}/>}
-        {step===2&&subMode==="confirm"&&<Step2Confirm imageData={imageData} onConfirm={handleImageConfirm} onRetake={()=>{setSubMode(null);setImageData(null);}}/>}
+        {step===2&&!subMode&&<Step2Upload onImageSelected={handleImageSelected} onTextMode={()=>setSubMode("text")} onBack={()=>setStep(1)} limitReached={usageInfo.reached}/>}
+        {step===2&&subMode==="text"&&<Step2Text onSubmit={handleTextSubmit} onBack={()=>setSubMode(null)} limitReached={usageInfo.reached}/>}
+        {step===2&&subMode==="confirm"&&<Step2Confirm imageData={imageData} onConfirm={handleImageConfirm} onRetake={()=>{setSubMode(null);setImageData(null);}} limitReached={usageInfo.reached}/>}
         {step===3&&<Step3 industryLabel={industries[industry]?.label||"汎用"}/>}
-        {step===4&&<Step4 entries={entries} allAccounts={getMerged(industry)} editingId={editingId} onEdit={id=>setEditingId(editingId===id?null:id)} onUpdate={(id,f,v)=>setEntries(prev=>prev.map(e=>e.id===id?{...e,[f]:v}:e))} onRemove={id=>setEntries(prev=>prev.filter(e=>e.id!==id))} onExport={exportCSV} onAddMore={()=>{setStep(2);setSubMode(null);setImageData(null);}} onReset={()=>{setStep(1);setEntries([]);setImageData(null);setSubMode(null);}}/>}
+        {step===4&&<Step4 entries={entries} allAccounts={getMerged(industry)} editingId={editingId} onEdit={id=>setEditingId(editingId===id?null:id)} onUpdate={(id,f,v)=>setEntries(prev=>prev.map(e=>e.id===id?{...e,[f]:v}:e))} onRemove={id=>setEntries(prev=>prev.filter(e=>e.id!==id))} onExport={exportCSV} onAddMore={()=>{setStep(2);setSubMode(null);setImageData(null);}} onReset={()=>{setStep(1);setEntries([]);setImageData(null);setSubMode(null);}} limitReached={usageInfo.reached}/>}
         <div style={{marginTop:20,fontSize:9,color:"#ccc",textAlign:"center"}}>※ AI仕訳は推定結果です。最終確認は経理担当者が行ってください</div>
       </div>
     </div>
