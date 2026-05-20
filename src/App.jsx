@@ -42,64 +42,37 @@ const cardBg = "#ffffff";
 const bdr = "#dde3ea";
 function deepClone(o){return JSON.parse(JSON.stringify(o))}
 
-/* ═══ Plan & monthly usage limits ═══ */
-const PLAN_LIMITS={
-  free:{label:"無料プラン",limit:10},
-  light:{label:"ライトプラン",limit:50},
-  basic:{label:"ベーシックプラン",limit:150},
+/* ═══ Auth & usage (server-side) ═══ */
+const SESSION_KEY="shiwake_session";
+const PLAN_LABELS={
+  free:"無料プラン",light:"ライトプラン",basic:"ベーシックプラン",
+  business:"ビジネスプラン",pro:"プロプラン",unlimited:"無制限プラン",
 };
-const USAGE_STORAGE_KEY="shiwake_user_data";
+const LIMIT_MSG="今月の処理枚数を使い切りました";
+const LIMIT_MSG_DETAIL="今月の処理枚数を使い切りました。翌月1日にリセットされます。";
 
-function getMonthKey(){
-  const d=new Date();
-  return`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
-}
-
-function loadUserData(){
+function loadSession(){
   try{
-    const raw=localStorage.getItem(USAGE_STORAGE_KEY);
-    if(raw){
-      const data=JSON.parse(raw);
-      if(!data.userId)data.userId=crypto.randomUUID();
-      if(!data.plan||!PLAN_LIMITS[data.plan])data.plan="free";
-      if(!data.usage)data.usage={};
-      return data;
-    }
+    const raw=sessionStorage.getItem(SESSION_KEY);
+    if(raw)return JSON.parse(raw);
   }catch{/* ignore */}
-  return{userId:crypto.randomUUID(),plan:"free",usage:{}};
+  return null;
 }
+function saveSession(session){sessionStorage.setItem(SESSION_KEY,JSON.stringify(session));}
+function clearSession(){sessionStorage.removeItem(SESSION_KEY);}
+function getPlanLabel(plan){return PLAN_LABELS[plan]||plan;}
 
-function saveUserData(data){
-  localStorage.setItem(USAGE_STORAGE_KEY,JSON.stringify(data));
-}
-
-function getUsageInfo(data){
-  const plan=data.plan||"free";
-  const limit=PLAN_LIMITS[plan]?.limit??10;
-  const month=getMonthKey();
-  const used=data.usage?.[month]??0;
-  return{plan,planLabel:PLAN_LIMITS[plan]?.label??"無料プラン",limit,used,remaining:Math.max(0,limit-used),month,reached:used>=limit};
-}
-
-function recordUsage(data){
-  const month=getMonthKey();
-  const next={...data,usage:{...data.usage,[month]:(data.usage?.[month]??0)+1}};
-  saveUserData(next);
-  return next;
-}
-
-function syncUsageFromServer(data,serverUsage){
-  if(serverUsage?.used==null)return data;
-  const month=getMonthKey();
-  const next={...data,usage:{...data.usage,[month]:serverUsage.used}};
-  saveUserData(next);
-  return next;
-}
-
-async function fetchServerUsage(userId,plan){
+async function fetchUsage(token){
   try{
-    const q=new URLSearchParams({userId,plan});
-    const res=await fetch(`/api/usage?${q}`);
+    const res=await fetch(`/api/usage?token=${encodeURIComponent(token)}`);
+    if(!res.ok)return null;
+    return await res.json();
+  }catch{return null;}
+}
+
+async function fetchAdminReport(token){
+  try{
+    const res=await fetch(`/api/usage?token=${encodeURIComponent(token)}&admin=true`);
     if(!res.ok)return null;
     return await res.json();
   }catch{return null;}
@@ -107,21 +80,134 @@ async function fetchServerUsage(userId,plan){
 
 const isMobileDevice=()=>/iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
-function UsageBar({usageInfo,onPlanChange}){
-  const pct=usageInfo.limit?Math.min(100,(usageInfo.used/usageInfo.limit)*100):0;
-  const barColor=usageInfo.reached?"#c62828":pct>=80?"#f57f17":"#27ae60";
+function usageFromApi(data,user){
+  if(!data)return{used:0,max:user?.maxPerMonth??10,remaining:user?.maxPerMonth??10,reached:false};
+  return{
+    used:data.used??0,
+    max:data.max??user?.maxPerMonth??10,
+    remaining:data.remaining??0,
+    month:data.month,
+    reached:(data.used??0)>=(data.max??0),
+    warn:(data.remaining??99)<=10&&(data.remaining??99)>0,
+  };
+}
+
+function UsageProgress({usageInfo}){
+  if(!usageInfo)return null;
+  const pct=usageInfo.max?Math.min(100,(usageInfo.used/usageInfo.max)*100):0;
+  const barColor=usageInfo.reached?"#c62828":usageInfo.warn?"#f57f17":"#27ae60";
   return(
-    <div style={{background:cardBg,borderRadius:10,padding:"12px 16px",border:`1px solid ${bdr}`,maxWidth:700,margin:"0 auto 16px"}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8,marginBottom:8}}>
-        <span style={{fontSize:12,fontWeight:700,color:accent}}>今月の処理枚数：{usageInfo.used} / {usageInfo.limit} 枚</span>
-        <select value={usageInfo.plan} onChange={e=>onPlanChange(e.target.value)} style={{fontSize:11,padding:"4px 8px",borderRadius:6,border:`1px solid ${bdr}`,fontFamily:font,color:"#555"}}>
-          {Object.entries(PLAN_LIMITS).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
-        </select>
+    <div style={{background:cardBg,borderRadius:10,padding:"12px 16px",border:`1px solid ${bdr}`,marginBottom:16}}>
+      <div style={{fontSize:12,fontWeight:700,color:accent,marginBottom:8}}>
+        今月の利用状況：{usageInfo.used} / {usageInfo.max} 枚
+        {usageInfo.remaining>0&&<span style={{fontWeight:400,color:"#666"}}>（残り {usageInfo.remaining} 枚）</span>}
       </div>
-      <div style={{height:6,background:"#e8ecf0",borderRadius:3,overflow:"hidden"}}>
-        <div style={{height:"100%",width:`${pct}%`,background:barColor,borderRadius:3,transition:"width 0.3s"}}/>
+      <div style={{height:8,background:"#e8ecf0",borderRadius:4,overflow:"hidden"}}>
+        <div style={{height:"100%",width:`${pct}%`,background:barColor,borderRadius:4,transition:"width 0.3s"}}/>
       </div>
-      {usageInfo.reached&&<p style={{margin:"8px 0 0",fontSize:12,color:"#c62828",fontWeight:700}}>今月の処理枚数を使い切りました</p>}
+      {usageInfo.warn&&!usageInfo.reached&&<p style={{margin:"8px 0 0",fontSize:12,color:"#f57f17",fontWeight:600}}>⚠️ 残り枚数が少なくなっています</p>}
+      {usageInfo.reached&&<p style={{margin:"8px 0 0",fontSize:12,color:"#c62828",fontWeight:700}}>{LIMIT_MSG_DETAIL}</p>}
+    </div>
+  );
+}
+
+function LoginScreen({onLogin}){
+  const[company,setCompany]=useState("");
+  const[password,setPassword]=useState("");
+  const[error,setError]=useState("");
+  const[loading,setLoading]=useState(false);
+  const submit=async e=>{
+    e.preventDefault();
+    setLoading(true);setError("");
+    try{
+      const res=await fetch("/api/auth",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({company,password})});
+      const data=await res.json();
+      if(!data.success){setError(data.error||"ログインに失敗しました");return;}
+      const session={token:data.token,user:data.user};
+      saveSession(session);
+      onLogin(session);
+    }catch{setError("通信エラーが発生しました");}
+    finally{setLoading(false);}
+  };
+  return(
+    <div style={{minHeight:"100vh",background:bg,display:"flex",alignItems:"center",justifyContent:"center",padding:20,fontFamily:font}}>
+      <div style={{background:cardBg,borderRadius:16,padding:"36px 32px",border:`1px solid ${bdr}`,width:"100%",maxWidth:400,boxShadow:"0 8px 32px rgba(0,0,0,0.08)"}}>
+        <div style={{textAlign:"center",marginBottom:28}}>
+          <div style={{fontSize:48,marginBottom:8}}>📒</div>
+          <h1 style={{margin:0,fontSize:22,color:accent,fontWeight:800}}>AI自動仕訳システム</h1>
+          <p style={{margin:"8px 0 0",fontSize:13,color:"#888"}}>会社名とパスワードでログイン</p>
+        </div>
+        <form onSubmit={submit}>
+          <label style={{fontSize:12,fontWeight:600,color:"#555",display:"block",marginBottom:6}}>会社名</label>
+          <input value={company} onChange={e=>setCompany(e.target.value)} placeholder="例：A商事" required
+            style={{width:"100%",padding:"12px 14px",borderRadius:8,border:`2px solid ${bdr}`,fontSize:14,fontFamily:font,boxSizing:"border-box",marginBottom:16}}/>
+          <label style={{fontSize:12,fontWeight:600,color:"#555",display:"block",marginBottom:6}}>パスワード</label>
+          <input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="パスワード" required
+            style={{width:"100%",padding:"12px 14px",borderRadius:8,border:`2px solid ${bdr}`,fontSize:14,fontFamily:font,boxSizing:"border-box",marginBottom:8}}/>
+          {error&&<p style={{color:"#c62828",fontSize:13,margin:"8px 0 16px",textAlign:"center"}}>{error}</p>}
+          <button type="submit" disabled={loading}
+            style={{width:"100%",padding:"14px 0",borderRadius:8,border:"none",background:loading?"#ccc":accentLight,color:"#fff",fontSize:16,fontWeight:700,cursor:loading?"default":"pointer",fontFamily:font,marginTop:8}}>
+            {loading?"ログイン中...":"ログイン"}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function AdminPanel({token,onClose}){
+  const[report,setReport]=useState(null);
+  const[loading,setLoading]=useState(true);
+  useEffect(()=>{fetchAdminReport(token).then(r=>{setReport(r);setLoading(false);});},[token]);
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:2000,display:"flex",justifyContent:"center",alignItems:"center",padding:16}} onClick={onClose}>
+      <div style={{background:cardBg,borderRadius:16,width:"100%",maxWidth:720,maxHeight:"85vh",overflow:"hidden",display:"flex",flexDirection:"column",boxShadow:"0 24px 80px rgba(0,0,0,0.25)"}} onClick={e=>e.stopPropagation()}>
+        <div style={{background:`linear-gradient(135deg,${accent},#2c3e50)`,padding:"16px 24px",color:"#fff",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <h2 style={{margin:0,fontSize:16,fontWeight:800}}>📊 利用状況管理</h2>
+          <button onClick={onClose} style={{padding:"6px 14px",borderRadius:6,border:"1px solid rgba(255,255,255,0.4)",background:"transparent",color:"#fff",fontSize:13,cursor:"pointer",fontFamily:font}}>閉じる</button>
+        </div>
+        <div style={{padding:20,overflowY:"auto",flex:1}}>
+          {loading?<p style={{textAlign:"center",color:"#888"}}>読み込み中...</p>:report?(
+            <>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:20}}>
+                <div style={{background:"#eaf2f8",borderRadius:10,padding:16}}>
+                  <div style={{fontSize:11,color:"#666"}}>今月のAPI総利用回数</div>
+                  <div style={{fontSize:24,fontWeight:800,color:accent}}>{report.totalUsed} 回</div>
+                </div>
+                <div style={{background:"#e8f5e9",borderRadius:10,padding:16}}>
+                  <div style={{fontSize:11,color:"#666"}}>推定費用（1回¥5）</div>
+                  <div style={{fontSize:24,fontWeight:800,color:"#1b5e20"}}>¥{report.estimatedCostYen?.toLocaleString()}</div>
+                </div>
+              </div>
+              <div style={{fontSize:12,color:"#888",marginBottom:10}}>対象月：{report.month}</div>
+              <div style={{overflowX:"auto"}}>
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                  <thead><tr style={{background:"#f5f7fa"}}>
+                    <th style={{padding:"8px 10px",textAlign:"left"}}>会社名</th>
+                    <th style={{padding:"8px 10px",textAlign:"left"}}>プラン</th>
+                    <th style={{padding:"8px 10px",textAlign:"left"}}>業種</th>
+                    <th style={{padding:"8px 10px",textAlign:"right"}}>利用枚数</th>
+                    <th style={{padding:"8px 10px",width:120}}>利用率</th>
+                  </tr></thead>
+                  <tbody>{report.users?.map(u=>(
+                    <tr key={u.id} style={{borderBottom:"1px solid #f0f2f5"}}>
+                      <td style={{padding:"8px 10px",fontWeight:600}}>{u.company}</td>
+                      <td style={{padding:"8px 10px"}}>{getPlanLabel(u.plan)}</td>
+                      <td style={{padding:"8px 10px"}}>{u.industry}</td>
+                      <td style={{padding:"8px 10px",textAlign:"right"}}>{u.used} / {u.max}</td>
+                      <td style={{padding:"8px 10px"}}>
+                        <div style={{height:6,background:"#e8ecf0",borderRadius:3,overflow:"hidden"}}>
+                          <div style={{height:"100%",width:`${Math.min(100,u.percent)}%`,background:u.percent>=100?"#c62828":u.percent>=80?"#f57f17":"#27ae60"}}/>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}</tbody>
+                </table>
+              </div>
+            </>
+          ):<p style={{color:"#c62828"}}>データを取得できませんでした</p>}
+        </div>
+      </div>
     </div>
   );
 }
@@ -228,16 +314,14 @@ function Step1({industries,industry,setIndustry,onNext,onOpenMaster}){
   );
 }
 
-const LIMIT_MSG="今月の処理枚数を使い切りました";
-
 /* ═══ Step 2: Upload ═══ */
-function Step2Upload({onImageSelected,onTextMode,onBack,limitReached}){
+function Step2Upload({onImageSelected,onTextMode,onBack,limitReached,usageInfo}){
   const fileRef=useRef(null);const cameraRef=useRef(null);const[dragOver,setDragOver]=useState(false);
   const handleFile=f=>{if(limitReached||!f)return;const r=new FileReader();r.onload=ev=>onImageSelected(ev.target.result,f.type);r.readAsDataURL(f);};
   const blocked={opacity:limitReached?0.45:1,pointerEvents:limitReached?"none":"auto",cursor:limitReached?"not-allowed":"pointer"};
   return(
     <div style={{maxWidth:700,margin:"0 auto"}}>
-      {limitReached&&<div style={{background:"#fce4ec",borderRadius:10,padding:14,marginBottom:12,color:"#c62828",fontSize:13,textAlign:"center",fontWeight:700}}>{LIMIT_MSG}</div>}
+      <UsageProgress usageInfo={usageInfo}/>
       <div style={{background:cardBg,borderRadius:14,padding:"28px 24px",border:`1px solid ${bdr}`,marginBottom:16,...blocked}}>
         <div style={{textAlign:"center",marginBottom:20}}>
           <div style={{fontSize:40,marginBottom:8}}>📷</div>
@@ -283,11 +367,11 @@ function Step2Upload({onImageSelected,onTextMode,onBack,limitReached}){
 }
 
 /* ═══ Step 2b: Text ═══ */
-function Step2Text({onSubmit,onBack,limitReached}){
+function Step2Text({onSubmit,onBack,limitReached,usageInfo}){
   const[text,setText]=useState("");
   return(
     <div style={{background:cardBg,borderRadius:14,padding:"28px 24px",border:`1px solid ${bdr}`,maxWidth:700,margin:"0 auto"}}>
-      {limitReached&&<div style={{background:"#fce4ec",borderRadius:10,padding:14,marginBottom:16,color:"#c62828",fontSize:13,textAlign:"center",fontWeight:700}}>{LIMIT_MSG}</div>}
+      <UsageProgress usageInfo={usageInfo}/>
       <div style={{textAlign:"center",marginBottom:20}}>
         <div style={{fontSize:40,marginBottom:8}}>✏️</div>
         <h2 style={{margin:0,fontSize:20,color:accent,fontWeight:800}}>領収書の内容を入力してください</h2>
@@ -309,10 +393,10 @@ function Step2Text({onSubmit,onBack,limitReached}){
 }
 
 /* ═══ Step 2c: Confirm Image ═══ */
-function Step2Confirm({imageData,onConfirm,onRetake,limitReached}){
+function Step2Confirm({imageData,onConfirm,onRetake,limitReached,usageInfo}){
   return(
     <div style={{background:cardBg,borderRadius:14,padding:"28px 24px",border:`1px solid ${bdr}`,maxWidth:700,margin:"0 auto"}}>
-      {limitReached&&<div style={{background:"#fce4ec",borderRadius:10,padding:14,marginBottom:16,color:"#c62828",fontSize:13,textAlign:"center",fontWeight:700}}>{LIMIT_MSG}</div>}
+      <UsageProgress usageInfo={usageInfo}/>
       <div style={{textAlign:"center",marginBottom:16}}>
         <h2 style={{margin:0,fontSize:20,color:accent,fontWeight:800}}>この画像でよろしいですか？</h2>
         <p style={{margin:"8px 0 0",fontSize:13,color:"#888"}}>金額や日付がはっきり読めるか確認してください</p>
@@ -437,6 +521,9 @@ function EditRowC({acct,onSave,onCancel}){const[ed,setEd]=useState({...acct});co
 
 /* ═══ Main App ═══ */
 export default function App(){
+  const[session,setSession]=useState(()=>loadSession());
+  const[usageData,setUsageData]=useState(null);
+  const[showAdmin,setShowAdmin]=useState(false);
   const[industries,setIndustries]=useState(deepClone(DEFAULT_INDUSTRIES));
   const[industry,setIndustry]=useState("general");
   const[step,setStep]=useState(1);
@@ -448,22 +535,49 @@ export default function App(){
   const[error,setError]=useState(null);
   const[showMaster,setShowMaster]=useState(false);
   const[csvModal,setCsvModal]=useState(null);
-  const[userData,setUserData]=useState(()=>loadUserData());
-  const usageInfo=getUsageInfo(userData);
 
-  const handlePlanChange=async plan=>{
-    const next={...userData,plan};
-    saveUserData(next);
-    setUserData(next);
-    const server=await fetchServerUsage(next.userId,plan);
-    if(server?.kvEnabled&&server.used!=null)setUserData(prev=>syncUsageFromServer(prev,server));
+  const user=session?.user;
+  const usageInfo=usageFromApi(usageData,user);
+
+  const refreshUsage=useCallback(async tok=>{
+    if(!tok)return;
+    const u=await fetchUsage(tok);
+    if(u)setUsageData(u);
+  },[]);
+
+  const handleLogin=s=>{
+    setSession(s);
+    setIndustry(s.user?.industry||"general");
+    refreshUsage(s.token);
+  };
+
+  const handleLogout=()=>{
+    clearSession();
+    setSession(null);
+    setUsageData(null);
+    setStep(1);
+    setEntries([]);
+    setSubMode(null);
+    setImageData(null);
+    setShowAdmin(false);
   };
 
   useEffect(()=>{
-    fetchServerUsage(userData.userId,userData.plan).then(server=>{
-      if(server?.kvEnabled&&server.used!=null)setUserData(prev=>syncUsageFromServer(prev,server));
-    });
-  },[userData.userId]);
+    if(session?.token)refreshUsage(session.token);
+  },[session?.token,refreshUsage]);
+
+  useEffect(()=>{
+    if(session?.user?.industry)setIndustry(session.user.industry);
+  },[session?.user?.industry]);
+
+  useEffect(()=>{
+    if(session)return;
+    (async()=>{
+      const res=await fetch("/api/auth",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({company:"",password:""})});
+      const data=await res.json();
+      if(data.success&&data.legacy)handleLogin({token:data.token,user:data.user});
+    })();
+  },[]);
 
   const getMerged=k=>{const base=industries.general?.accounts||[];if(k==="general")return base;return[...(industries[k]?.accounts||[]),...base];};
 
@@ -475,34 +589,32 @@ export default function App(){
 
   // ★ サーバー経由でAPI呼出し（APIキーはサーバー側で管理）
   const callAPI=async content=>{
-    if(getUsageInfo(userData).reached){
-      setError(LIMIT_MSG);
+    if(usageInfo.reached){
+      setError(LIMIT_MSG_DETAIL);
       setStep(2);
       setSubMode(null);
       return;
     }
     setStep(3);setError(null);
     try{
+      const body={system:buildPrompt(),messages:[{role:'user',content}]};
+      if(session?.token)body.token=session.token;
       const res=await fetch('/api/chat',{
         method:'POST',
         headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({
-          system:buildPrompt(),
-          messages:[{role:'user',content}],
-          userId:userData.userId,
-          plan:userData.plan||"free",
-        }),
+        body:JSON.stringify(body),
       });
       const data=await res.json().catch(()=>({}));
       if(!res.ok){
-        if(data.usage)setUserData(prev=>syncUsageFromServer(prev,data.usage));
+        if(data.usage)setUsageData(data.usage);
+        if(res.status===401){handleLogout();throw new Error(data.error||"再ログインしてください");}
         throw new Error(data.error||`Error ${res.status}`);
       }
       const text=data.content.filter(b=>b.type==='text').map(b=>b.text).join('');
       const parsed=JSON.parse(text.replace(/```json|```/g,'').trim());
       if(parsed.entries?.length)setEntries(prev=>[...prev,...parsed.entries.map((e,i)=>({...e,id:Date.now()+i}))]);
-      if(data.usage?.used!=null)setUserData(prev=>syncUsageFromServer(prev,data.usage));
-      else setUserData(prev=>recordUsage(prev));
+      if(data.usage)setUsageData(data.usage);
+      else if(session?.token)await refreshUsage(session.token);
       setStep(4);
     }catch(err){setError(err.message);setStep(2);setSubMode(null);}
   };
@@ -516,22 +628,34 @@ export default function App(){
     shareOrSaveCSV(buildCSV(entries),filename,setCsvModal);
   };
 
+  if(!session)return<LoginScreen onLogin={handleLogin}/>;
+
   return(
     <div style={{fontFamily:font,background:bg,minHeight:"100vh",padding:"20px 14px"}}>
       {showMaster&&<MasterPanel industries={industries} setIndustries={setIndustries} onClose={()=>setShowMaster(false)}/>}
       {csvModal&&<CsvExportModal csvText={csvModal.csvText} filename={csvModal.filename} onClose={()=>setCsvModal(null)}/>}
+      {showAdmin&&session?.token&&<AdminPanel token={session.token} onClose={()=>setShowAdmin(false)}/>}
       <div style={{maxWidth:960,margin:"0 auto"}}>
-        <div style={{textAlign:"center",marginBottom:20}}>
-          <h1 style={{margin:0,fontSize:22,color:accent,fontWeight:800}}>📒 AI自動仕訳システム</h1>
-          <p style={{margin:"4px 0 0",fontSize:12,color:"#999"}}>領収書を取り込むだけで、AIが自動で仕訳帳を作成します</p>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:12,marginBottom:20}}>
+          <div>
+            <h1 style={{margin:0,fontSize:22,color:accent,fontWeight:800}}>📒 AI自動仕訳システム</h1>
+            <p style={{margin:"4px 0 0",fontSize:12,color:"#999"}}>領収書を取り込むだけで、AIが自動で仕訳帳を作成します</p>
+          </div>
+          <div style={{fontSize:12,color:"#555",textAlign:"right",lineHeight:1.8}}>
+            <div><strong>{user?.company}</strong> 様｜{getPlanLabel(user?.plan)}</div>
+            <div>残り <strong style={{color:usageInfo.reached?"#c62828":accent}}>{usageInfo.remaining}</strong> 枚</div>
+            <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:4}}>
+              {user?.isAdmin&&<button onClick={()=>setShowAdmin(true)} style={{padding:"4px 10px",borderRadius:6,border:`1px solid ${bdr}`,background:"#fff",fontSize:11,cursor:"pointer",fontFamily:font}}>📊 管理画面</button>}
+              <button onClick={handleLogout} style={{padding:"4px 10px",borderRadius:6,border:`1px solid ${bdr}`,background:"#fff",fontSize:11,cursor:"pointer",fontFamily:font,color:"#888"}}>ログアウト</button>
+            </div>
+          </div>
         </div>
         <StepBar current={step}/>
-        <UsageBar usageInfo={usageInfo} onPlanChange={handlePlanChange}/>
-        {error&&<div style={{background:"#fce4ec",borderRadius:10,padding:14,marginBottom:16,color:"#c62828",fontSize:13,textAlign:"center",maxWidth:700,margin:"0 auto 16px"}}>⚠️ {error}{error!==LIMIT_MSG&&<><br/><span style={{fontSize:12}}>もう一度お試しください</span></>}</div>}
+        {error&&<div style={{background:"#fce4ec",borderRadius:10,padding:14,marginBottom:16,color:"#c62828",fontSize:13,textAlign:"center",maxWidth:700,margin:"0 auto 16px"}}>⚠️ {error}{!error.includes("使い切り")&&error!=="再ログイン"&&<><br/><span style={{fontSize:12}}>もう一度お試しください</span></>}</div>}
         {step===1&&<Step1 industries={industries} industry={industry} setIndustry={setIndustry} onNext={()=>{setStep(2);setSubMode(null);}} onOpenMaster={()=>setShowMaster(true)}/>}
-        {step===2&&!subMode&&<Step2Upload onImageSelected={handleImageSelected} onTextMode={()=>setSubMode("text")} onBack={()=>setStep(1)} limitReached={usageInfo.reached}/>}
-        {step===2&&subMode==="text"&&<Step2Text onSubmit={handleTextSubmit} onBack={()=>setSubMode(null)} limitReached={usageInfo.reached}/>}
-        {step===2&&subMode==="confirm"&&<Step2Confirm imageData={imageData} onConfirm={handleImageConfirm} onRetake={()=>{setSubMode(null);setImageData(null);}} limitReached={usageInfo.reached}/>}
+        {step===2&&!subMode&&<Step2Upload onImageSelected={handleImageSelected} onTextMode={()=>setSubMode("text")} onBack={()=>setStep(1)} limitReached={usageInfo.reached} usageInfo={usageInfo}/>}
+        {step===2&&subMode==="text"&&<Step2Text onSubmit={handleTextSubmit} onBack={()=>setSubMode(null)} limitReached={usageInfo.reached} usageInfo={usageInfo}/>}
+        {step===2&&subMode==="confirm"&&<Step2Confirm imageData={imageData} onConfirm={handleImageConfirm} onRetake={()=>{setSubMode(null);setImageData(null);}} limitReached={usageInfo.reached} usageInfo={usageInfo}/>}
         {step===3&&<Step3 industryLabel={industries[industry]?.label||"汎用"}/>}
         {step===4&&<Step4 entries={entries} allAccounts={getMerged(industry)} editingId={editingId} onEdit={id=>setEditingId(editingId===id?null:id)} onUpdate={(id,f,v)=>setEntries(prev=>prev.map(e=>e.id===id?{...e,[f]:v}:e))} onRemove={id=>setEntries(prev=>prev.filter(e=>e.id!==id))} onExport={exportCSV} onAddMore={()=>{setStep(2);setSubMode(null);setImageData(null);}} onReset={()=>{setStep(1);setEntries([]);setImageData(null);setSubMode(null);}} limitReached={usageInfo.reached}/>}
         <div style={{marginTop:20,fontSize:9,color:"#ccc",textAlign:"center"}}>※ AI仕訳は推定結果です。最終確認は経理担当者が行ってください</div>
