@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 
 /* ═══ Industry & Account Data ═══ */
 const DEFAULT_INDUSTRIES = {
@@ -86,6 +86,23 @@ function recordUsage(data){
   const next={...data,usage:{...data.usage,[month]:(data.usage?.[month]??0)+1}};
   saveUserData(next);
   return next;
+}
+
+function syncUsageFromServer(data,serverUsage){
+  if(serverUsage?.used==null)return data;
+  const month=getMonthKey();
+  const next={...data,usage:{...data.usage,[month]:serverUsage.used}};
+  saveUserData(next);
+  return next;
+}
+
+async function fetchServerUsage(userId,plan){
+  try{
+    const q=new URLSearchParams({userId,plan});
+    const res=await fetch(`/api/usage?${q}`);
+    if(!res.ok)return null;
+    return await res.json();
+  }catch{return null;}
 }
 
 const isMobileDevice=()=>/iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
@@ -434,11 +451,19 @@ export default function App(){
   const[userData,setUserData]=useState(()=>loadUserData());
   const usageInfo=getUsageInfo(userData);
 
-  const handlePlanChange=plan=>{
+  const handlePlanChange=async plan=>{
     const next={...userData,plan};
     saveUserData(next);
     setUserData(next);
+    const server=await fetchServerUsage(next.userId,plan);
+    if(server?.kvEnabled&&server.used!=null)setUserData(prev=>syncUsageFromServer(prev,server));
   };
+
+  useEffect(()=>{
+    fetchServerUsage(userData.userId,userData.plan).then(server=>{
+      if(server?.kvEnabled&&server.used!=null)setUserData(prev=>syncUsageFromServer(prev,server));
+    });
+  },[userData.userId]);
 
   const getMerged=k=>{const base=industries.general?.accounts||[];if(k==="general")return base;return[...(industries[k]?.accounts||[]),...base];};
 
@@ -461,14 +486,23 @@ export default function App(){
       const res=await fetch('/api/chat',{
         method:'POST',
         headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({system:buildPrompt(),messages:[{role:'user',content}]}),
+        body:JSON.stringify({
+          system:buildPrompt(),
+          messages:[{role:'user',content}],
+          userId:userData.userId,
+          plan:userData.plan||"free",
+        }),
       });
-      if(!res.ok){const err=await res.json().catch(()=>({}));throw new Error(err.error||`Error ${res.status}`);}
-      const data=await res.json();
+      const data=await res.json().catch(()=>({}));
+      if(!res.ok){
+        if(data.usage)setUserData(prev=>syncUsageFromServer(prev,data.usage));
+        throw new Error(data.error||`Error ${res.status}`);
+      }
       const text=data.content.filter(b=>b.type==='text').map(b=>b.text).join('');
       const parsed=JSON.parse(text.replace(/```json|```/g,'').trim());
       if(parsed.entries?.length)setEntries(prev=>[...prev,...parsed.entries.map((e,i)=>({...e,id:Date.now()+i}))]);
-      setUserData(prev=>recordUsage(prev));
+      if(data.usage?.used!=null)setUserData(prev=>syncUsageFromServer(prev,data.usage));
+      else setUserData(prev=>recordUsage(prev));
       setStep(4);
     }catch(err){setError(err.message);setStep(2);setSubMode(null);}
   };
