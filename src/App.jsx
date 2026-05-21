@@ -120,7 +120,7 @@ function LoginScreen({onLogin}){
     e.preventDefault();
     setLoading(true);setError("");
     try{
-      const res=await fetch("/api/auth",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({company,password})});
+      const res=await fetch("/api/auth",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({company:company.trim(),password:password.trim()})});
       const data=await res.json();
       if(!data.success){setError(data.error||"ログインに失敗しました");return;}
       const session={token:data.token,user:data.user};
@@ -607,9 +607,16 @@ export default function App(){
       const data=await res.json().catch(()=>({}));
       if(!res.ok){
         if(data.usage)setUsageData(data.usage);
-        if(res.status===401){handleLogout();throw new Error(data.error||"再ログインしてください");}
-        throw new Error(data.error||`Error ${res.status}`);
+        const msg=data.error||`Error ${res.status}`;
+        if(res.status===401){
+          setError(msg);
+          setStep(2);
+          setSubMode(null);
+          return;
+        }
+        throw new Error(msg);
       }
+      if(!data.content?.length)throw new Error("AIの応答を取得できませんでした");
       const text=data.content.filter(b=>b.type==='text').map(b=>b.text).join('');
       const parsed=JSON.parse(text.replace(/```json|```/g,'').trim());
       if(parsed.entries?.length)setEntries(prev=>[...prev,...parsed.entries.map((e,i)=>({...e,id:Date.now()+i}))]);

@@ -8,7 +8,8 @@ export function isAuthEnabled() {
 export function loadUserList() {
   if (!isAuthEnabled()) return [];
   try {
-    const list = JSON.parse(process.env.USER_LIST);
+    const raw = process.env.USER_LIST.trim();
+    const list = JSON.parse(raw);
     return Array.isArray(list) ? list : [];
   } catch {
     return [];
@@ -17,9 +18,12 @@ export function loadUserList() {
 
 export function findUserByCredentials(company, password) {
   const users = loadUserList();
-  return users.find(
-    (u) => u.company === company && u.password === password
-  ) || null;
+  const c = String(company ?? '').trim();
+  const p = String(password ?? '').trim();
+  return (
+    users.find((u) => String(u.company).trim() === c && String(u.password) === p) ||
+    null
+  );
 }
 
 export function findUserById(id) {

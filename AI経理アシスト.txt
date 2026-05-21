@@ -1,0 +1,759 @@
+import { useState, useCallback, useRef } from "react";
+
+const DEFAULT_INDUSTRIES = {
+  general: {
+    label: "汎用（全業種共通）", icon: "🏢", isBase: true,
+    accounts: [
+      { code: "611", name: "役員報酬", category: "expenses" },
+      { code: "612", name: "給料手当", category: "expenses" },
+      { code: "613", name: "法定福利費", category: "expenses" },
+      { code: "614", name: "福利厚生費", category: "expenses" },
+      { code: "621", name: "旅費交通費", category: "expenses" },
+      { code: "622", name: "通信費", category: "expenses" },
+      { code: "623", name: "消耗品費", category: "expenses" },
+      { code: "624", name: "事務用品費", category: "expenses" },
+      { code: "625", name: "水道光熱費", category: "expenses" },
+      { code: "626", name: "地代家賃", category: "expenses" },
+      { code: "627", name: "保険料", category: "expenses" },
+      { code: "628", name: "修繕費", category: "expenses" },
+      { code: "629", name: "租税公課", category: "expenses" },
+      { code: "631", name: "接待交際費", category: "expenses" },
+      { code: "632", name: "会議費", category: "expenses" },
+      { code: "633", name: "広告宣伝費", category: "expenses" },
+      { code: "634", name: "支払手数料", category: "expenses" },
+      { code: "635", name: "車両費", category: "expenses" },
+      { code: "636", name: "リース料", category: "expenses" },
+      { code: "637", name: "減価償却費", category: "expenses" },
+      { code: "638", name: "外注費", category: "expenses" },
+      { code: "639", name: "諸会費", category: "expenses" },
+      { code: "641", name: "新聞図書費", category: "expenses" },
+      { code: "642", name: "研修費", category: "expenses" },
+      { code: "649", name: "雑費", category: "expenses" },
+      { code: "111", name: "現金", category: "assets" },
+      { code: "112", name: "普通預金", category: "assets" },
+      { code: "113", name: "当座預金", category: "assets" },
+      { code: "121", name: "売掛金", category: "assets" },
+      { code: "131", name: "前払費用", category: "assets" },
+      { code: "141", name: "仮払金", category: "assets" },
+      { code: "151", name: "建物", category: "assets" },
+      { code: "152", name: "車両運搬具", category: "assets" },
+      { code: "153", name: "工具器具備品", category: "assets" },
+      { code: "154", name: "ソフトウェア", category: "assets" },
+      { code: "211", name: "買掛金", category: "liabilities" },
+      { code: "212", name: "未払金", category: "liabilities" },
+      { code: "213", name: "未払費用", category: "liabilities" },
+      { code: "214", name: "預り金", category: "liabilities" },
+      { code: "215", name: "仮受消費税", category: "liabilities" },
+      { code: "221", name: "借入金", category: "liabilities" },
+    ],
+  },
+  construction: {
+    label: "建設業", icon: "🏗️",
+    accounts: [
+      { code: "511", name: "材料費", category: "expenses" },
+      { code: "512", name: "労務費", category: "expenses" },
+      { code: "513", name: "外注加工費", category: "expenses" },
+      { code: "514", name: "機械等経費", category: "expenses" },
+      { code: "515", name: "仮設材料費", category: "expenses" },
+      { code: "516", name: "安全対策費", category: "expenses" },
+      { code: "517", name: "産廃処理費", category: "expenses" },
+      { code: "518", name: "重機リース料", category: "expenses" },
+      { code: "519", name: "測量設計費", category: "expenses" },
+      { code: "521", name: "現場交通費", category: "expenses" },
+      { code: "522", name: "工事保険料", category: "expenses" },
+    ],
+  },
+  it_services: {
+    label: "IT・情報サービス業", icon: "💻",
+    accounts: [
+      { code: "511", name: "クラウド利用料", category: "expenses" },
+      { code: "512", name: "ライセンス費", category: "expenses" },
+      { code: "513", name: "サーバー費用", category: "expenses" },
+      { code: "514", name: "外注開発費", category: "expenses" },
+      { code: "515", name: "SaaS利用料", category: "expenses" },
+      { code: "516", name: "ドメイン費用", category: "expenses" },
+      { code: "517", name: "データセンター費", category: "expenses" },
+      { code: "518", name: "セキュリティ対策費", category: "expenses" },
+    ],
+  },
+  retail: {
+    label: "小売・飲食業", icon: "🛒",
+    accounts: [
+      { code: "511", name: "商品仕入高", category: "expenses" },
+      { code: "512", name: "原材料費", category: "expenses" },
+      { code: "513", name: "包装資材費", category: "expenses" },
+      { code: "514", name: "容器代", category: "expenses" },
+      { code: "515", name: "衛生管理費", category: "expenses" },
+      { code: "516", name: "食材廃棄損", category: "expenses" },
+      { code: "517", name: "店舗装飾費", category: "expenses" },
+      { code: "518", name: "POS関連費", category: "expenses" },
+    ],
+  },
+  manufacturing: {
+    label: "製造業", icon: "🏭",
+    accounts: [
+      { code: "511", name: "原材料費", category: "expenses" },
+      { code: "512", name: "労務費", category: "expenses" },
+      { code: "513", name: "製造経費", category: "expenses" },
+      { code: "514", name: "外注加工費", category: "expenses" },
+      { code: "515", name: "動力費", category: "expenses" },
+      { code: "516", name: "金型費", category: "expenses" },
+      { code: "517", name: "品質管理費", category: "expenses" },
+      { code: "518", name: "工場消耗品費", category: "expenses" },
+    ],
+  },
+  realestate: {
+    label: "不動産業", icon: "🏠",
+    accounts: [
+      { code: "511", name: "管理委託費", category: "expenses" },
+      { code: "512", name: "仲介手数料", category: "expenses" },
+      { code: "513", name: "修繕積立金", category: "expenses" },
+      { code: "514", name: "原状回復費", category: "expenses" },
+      { code: "515", name: "鑑定評価費", category: "expenses" },
+      { code: "516", name: "登記費用", category: "expenses" },
+      { code: "517", name: "固定資産税", category: "expenses" },
+    ],
+  },
+  medical: {
+    label: "医療・福祉", icon: "🏥",
+    accounts: [
+      { code: "511", name: "医薬品費", category: "expenses" },
+      { code: "512", name: "診療材料費", category: "expenses" },
+      { code: "513", name: "医療機器費", category: "expenses" },
+      { code: "514", name: "検査委託費", category: "expenses" },
+      { code: "515", name: "給食材料費", category: "expenses" },
+      { code: "516", name: "寝具消耗品費", category: "expenses" },
+      { code: "517", name: "介護用品費", category: "expenses" },
+    ],
+  },
+  transport: {
+    label: "運輸・物流業", icon: "🚛",
+    accounts: [
+      { code: "511", name: "燃料費", category: "expenses" },
+      { code: "512", name: "車両修繕費", category: "expenses" },
+      { code: "513", name: "高速道路料金", category: "expenses" },
+      { code: "514", name: "運送保険料", category: "expenses" },
+      { code: "515", name: "倉庫保管料", category: "expenses" },
+      { code: "516", name: "荷役費", category: "expenses" },
+      { code: "517", name: "車検整備費", category: "expenses" },
+    ],
+  },
+  waste: {
+    label: "産廃・環境業", icon: "♻️",
+    accounts: [
+      { code: "511", name: "処分場管理費", category: "expenses" },
+      { code: "512", name: "収集運搬費", category: "expenses" },
+      { code: "513", name: "中間処理費", category: "expenses" },
+      { code: "514", name: "最終処分費", category: "expenses" },
+      { code: "515", name: "環境測定費", category: "expenses" },
+      { code: "516", name: "マニフェスト費", category: "expenses" },
+      { code: "517", name: "特管産廃処理費", category: "expenses" },
+    ],
+  },
+};
+
+const CATEGORY_LABELS = {
+  expenses: { label: "費用", color: "#c0392b" },
+  assets: { label: "資産", color: "#2471a3" },
+  liabilities: { label: "負債", color: "#7d3c98" },
+};
+
+const font = `'Noto Sans JP', 'Helvetica Neue', sans-serif`;
+const accent = "#1a3a4a";
+const accentLight = "#2980b9";
+const bg = "#f4f6f8";
+const cardBg = "#ffffff";
+const border = "#dde3ea";
+
+function deepClone(o) { return JSON.parse(JSON.stringify(o)); }
+
+/* ─── Edit Row ─── */
+function EditRow({ acct, onSave, onCancel }) {
+  const [ed, setEd] = useState({ ...acct });
+  return (
+    <tr style={{ background: "#fffef5", borderBottom: "1px solid #f0f2f5" }}>
+      <td style={{ padding: "8px 12px" }}>
+        <input value={ed.code} onChange={e => setEd({ ...ed, code: e.target.value })}
+          style={{ width: "100%", padding: 6, fontSize: 12, borderRadius: 4, border: `1px solid ${border}`, fontFamily: "monospace", boxSizing: "border-box" }} />
+      </td>
+      <td style={{ padding: "8px 12px" }}>
+        <input value={ed.name} onChange={e => setEd({ ...ed, name: e.target.value })}
+          style={{ width: "100%", padding: 6, fontSize: 12, borderRadius: 4, border: `1px solid ${border}`, fontFamily: font, boxSizing: "border-box" }} />
+      </td>
+      <td style={{ padding: "8px 12px" }}>
+        <select value={ed.category} onChange={e => setEd({ ...ed, category: e.target.value })}
+          style={{ padding: 6, fontSize: 12, borderRadius: 4, border: `1px solid ${border}`, fontFamily: font }}>
+          {Object.entries(CATEGORY_LABELS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+        </select>
+      </td>
+      <td style={{ padding: "8px 12px", textAlign: "center" }}>
+        <button onClick={() => onSave(ed)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, marginRight: 4 }}>✅</button>
+        <button onClick={onCancel} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14 }}>❌</button>
+      </td>
+    </tr>
+  );
+}
+
+/* ═══════════════════════════════════
+   Master Management Panel
+   ═══════════════════════════════════ */
+function MasterPanel({ industries, setIndustries, onClose }) {
+  const [selInd, setSelInd] = useState("general");
+  const [editRow, setEditRow] = useState(null);
+  const [addMode, setAddMode] = useState(false);
+  const [newAcct, setNewAcct] = useState({ code: "", name: "", category: "expenses" });
+  const [addIndMode, setAddIndMode] = useState(false);
+  const [newInd, setNewInd] = useState({ key: "", label: "", icon: "📁" });
+  const [filterCat, setFilterCat] = useState("all");
+  const [search, setSearch] = useState("");
+
+  const cur = industries[selInd];
+  const filtered = (cur?.accounts || []).filter(a => {
+    if (filterCat !== "all" && a.category !== filterCat) return false;
+    if (search && !a.name.includes(search) && !a.code.includes(search)) return false;
+    return true;
+  });
+
+  const addAccount = () => {
+    if (!newAcct.code.trim() || !newAcct.name.trim()) return;
+    const u = deepClone(industries);
+    u[selInd].accounts.push({ ...newAcct });
+    setIndustries(u);
+    setNewAcct({ code: "", name: "", category: "expenses" });
+    setAddMode(false);
+  };
+
+  const delAccount = idx => {
+    const t = filtered[idx];
+    const ri = cur.accounts.findIndex(a => a.code === t.code && a.name === t.name);
+    if (ri < 0) return;
+    const u = deepClone(industries);
+    u[selInd].accounts.splice(ri, 1);
+    setIndustries(u);
+  };
+
+  const saveEdit = (idx, edited) => {
+    const t = filtered[idx];
+    const ri = cur.accounts.findIndex(a => a.code === t.code && a.name === t.name);
+    if (ri < 0) return;
+    const u = deepClone(industries);
+    u[selInd].accounts[ri] = edited;
+    setIndustries(u);
+    setEditRow(null);
+  };
+
+  const addIndustry = () => {
+    const k = newInd.key.trim().replace(/\s/g, "_").toLowerCase();
+    if (!k || !newInd.label.trim() || industries[k]) return;
+    const u = deepClone(industries);
+    u[k] = { label: newInd.label.trim(), icon: newInd.icon || "📁", accounts: [] };
+    setIndustries(u);
+    setSelInd(k);
+    setAddIndMode(false);
+    setNewInd({ key: "", label: "", icon: "📁" });
+  };
+
+  const delIndustry = k => {
+    if (k === "general") return;
+    const u = deepClone(industries);
+    delete u[k];
+    setIndustries(u);
+    setSelInd("general");
+  };
+
+  const exportCSV = () => {
+    const rows = ["業種キー,業種名,科目コード,科目名,区分"];
+    Object.entries(industries).forEach(([k, ind]) =>
+      (ind.accounts || []).forEach(a => rows.push(`${k},${ind.label},${a.code},${a.name},${a.category}`))
+    );
+    const blob = new Blob(["\uFEFF" + rows.join("\n")], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    Object.assign(document.createElement("a"), { href: url, download: `勘定科目マスタ_${new Date().toISOString().slice(0, 10)}.csv` }).click();
+    URL.revokeObjectURL(url);
+  };
+
+  const importCSV = e => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      try {
+        const lines = ev.target.result.split("\n").filter(l => l.trim());
+        if (lines.length < 2) return;
+        const u = deepClone(industries);
+        // Clear all non-base accounts for reimport
+        Object.keys(u).forEach(k => { if (!u[k].isBase) u[k].accounts = []; });
+        for (let i = 1; i < lines.length; i++) {
+          const cols = lines[i].split(",");
+          if (cols.length < 5) continue;
+          const [indKey, indLabel, code, name, category] = cols.map(c => c.trim());
+          if (!u[indKey]) u[indKey] = { label: indLabel, icon: "📁", accounts: [] };
+          if (indKey === "general") {
+            const exists = u.general.accounts.find(a => a.code === code && a.name === name);
+            if (!exists) u.general.accounts.push({ code, name, category });
+          } else {
+            u[indKey].accounts.push({ code, name, category });
+          }
+        }
+        setIndustries(u);
+      } catch (err) { console.error(err); }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  };
+
+  const pill = active => ({
+    padding: "6px 13px", borderRadius: 7,
+    border: active ? `2px solid ${accentLight}` : `1px solid ${border}`,
+    background: active ? "#eaf2f8" : "#fff",
+    color: active ? accent : "#555",
+    fontWeight: active ? 700 : 400,
+    fontSize: 12, cursor: "pointer", fontFamily: font,
+  });
+
+  const inp = { padding: 6, fontSize: 12, borderRadius: 4, border: `1px solid ${border}`, fontFamily: font, boxSizing: "border-box", width: "100%", marginBottom: 4 };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 1000, display: "flex", justifyContent: "center", alignItems: "center", padding: 16 }}>
+      <div style={{ background: bg, borderRadius: 16, width: "100%", maxWidth: 920, maxHeight: "90vh", overflow: "hidden", display: "flex", flexDirection: "column", boxShadow: "0 24px 80px rgba(0,0,0,0.25)" }}>
+        {/* Header */}
+        <div style={{ background: `linear-gradient(135deg, ${accent}, #2c3e50)`, padding: "18px 24px", color: "#fff", display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 }}>
+          <div>
+            <h2 style={{ margin: 0, fontSize: 17, fontWeight: 800 }}>⚙️ 勘定科目マスタ管理</h2>
+            <p style={{ margin: "3px 0 0", fontSize: 11, opacity: 0.8 }}>業種別の勘定科目を追加・編集・削除｜CSV入出力対応</p>
+          </div>
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <label style={{ padding: "5px 12px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.4)", background: "transparent", color: "#fff", fontSize: 11, cursor: "pointer", fontFamily: font }}>
+              📤 CSV取込 <input type="file" accept=".csv" onChange={importCSV} style={{ display: "none" }} />
+            </label>
+            <button onClick={exportCSV} style={{ padding: "5px 12px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.4)", background: "transparent", color: "#fff", fontSize: 11, cursor: "pointer", fontFamily: font }}>📥 CSV出力</button>
+            <button onClick={onClose} style={{ padding: "5px 12px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.4)", background: "transparent", color: "#fff", fontSize: 15, cursor: "pointer", fontFamily: font, fontWeight: 700 }}>✕</button>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
+          {/* Sidebar */}
+          <div style={{ width: 210, borderRight: `1px solid ${border}`, background: "#fff", overflowY: "auto", flexShrink: 0, padding: "10px 0" }}>
+            <div style={{ padding: "0 12px 6px", fontSize: 10, color: "#999", fontWeight: 700 }}>業種一覧</div>
+            {Object.entries(industries).map(([k, ind]) => (
+              <div key={k} onClick={() => { setSelInd(k); setEditRow(null); setAddMode(false); }}
+                style={{ padding: "9px 14px", cursor: "pointer", background: selInd === k ? "#eaf2f8" : "transparent", borderLeft: selInd === k ? `3px solid ${accentLight}` : "3px solid transparent", fontSize: 12, fontWeight: selInd === k ? 700 : 400, color: selInd === k ? accent : "#444", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span>{ind.icon} {ind.label}</span>
+                <span style={{ fontSize: 10, color: "#aaa" }}>{(ind.accounts || []).length}</span>
+              </div>
+            ))}
+            {addIndMode ? (
+              <div style={{ padding: "8px 10px", borderTop: `1px solid ${border}` }}>
+                <input placeholder="キー (英数字)" value={newInd.key} onChange={e => setNewInd({ ...newInd, key: e.target.value })} style={inp} />
+                <input placeholder="業種名" value={newInd.label} onChange={e => setNewInd({ ...newInd, label: e.target.value })} style={inp} />
+                <input placeholder="アイコン絵文字" value={newInd.icon} onChange={e => setNewInd({ ...newInd, icon: e.target.value })} style={{ ...inp, marginBottom: 6 }} />
+                <div style={{ display: "flex", gap: 4 }}>
+                  <button onClick={addIndustry} style={{ ...pill(true), flex: 1, fontSize: 11 }}>追加</button>
+                  <button onClick={() => setAddIndMode(false)} style={{ ...pill(false), flex: 1, fontSize: 11 }}>取消</button>
+                </div>
+              </div>
+            ) : (
+              <div style={{ padding: "8px 10px" }}>
+                <button onClick={() => setAddIndMode(true)} style={{ width: "100%", padding: "7px 0", borderRadius: 6, border: `1px dashed ${accentLight}`, background: "transparent", color: accentLight, fontSize: 11, cursor: "pointer", fontFamily: font }}>＋ 業種を追加</button>
+              </div>
+            )}
+          </div>
+
+          {/* Main */}
+          <div style={{ flex: 1, overflowY: "auto", padding: 18 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: 15, color: accent }}>{cur?.icon} {cur?.label}</h3>
+                <p style={{ margin: "2px 0 0", fontSize: 11, color: "#999" }}>
+                  {cur?.isBase ? "全業種で共通の基本科目" : "この業種選択時 → 以下＋汎用科目でAI判定"}
+                </p>
+              </div>
+              {!cur?.isBase && (
+                <button onClick={() => { if (confirm(`「${cur.label}」を削除？`)) delIndustry(selInd); }}
+                  style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #e74c3c", background: "#fff", color: "#e74c3c", fontSize: 11, cursor: "pointer", fontFamily: font }}>
+                  🗑️ 業種削除
+                </button>
+              )}
+            </div>
+
+            {/* Filters */}
+            <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}>
+              <button onClick={() => setFilterCat("all")} style={pill(filterCat === "all")}>すべて</button>
+              {Object.entries(CATEGORY_LABELS).map(([k, v]) => (
+                <button key={k} onClick={() => setFilterCat(k)} style={pill(filterCat === k)}>
+                  <span style={{ display: "inline-block", width: 7, height: 7, borderRadius: 4, background: v.color, marginRight: 4 }} />{v.label}
+                </button>
+              ))}
+              <input placeholder="🔍 検索" value={search} onChange={e => setSearch(e.target.value)}
+                style={{ marginLeft: "auto", padding: "5px 10px", borderRadius: 6, border: `1px solid ${border}`, fontSize: 11, fontFamily: font, width: 160 }} />
+            </div>
+
+            <div style={{ background: "#fff", borderRadius: 10, border: `1px solid ${border}`, overflow: "hidden" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                <thead>
+                  <tr style={{ background: "#f5f7fa", fontSize: 11, color: "#777" }}>
+                    <th style={{ padding: "9px 12px", textAlign: "left", width: 80 }}>コード</th>
+                    <th style={{ padding: "9px 12px", textAlign: "left" }}>勘定科目名</th>
+                    <th style={{ padding: "9px 12px", textAlign: "left", width: 80 }}>区分</th>
+                    <th style={{ padding: "9px 12px", width: 90 }}></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map((a, i) =>
+                    editRow === i ? (
+                      <EditRow key={i} acct={a} onSave={ed => saveEdit(i, ed)} onCancel={() => setEditRow(null)} />
+                    ) : (
+                      <tr key={i} style={{ borderBottom: "1px solid #f0f2f5" }}>
+                        <td style={{ padding: "8px 12px", fontFamily: "monospace", fontSize: 11, color: "#666" }}>{a.code}</td>
+                        <td style={{ padding: "8px 12px", fontWeight: 500 }}>{a.name}</td>
+                        <td style={{ padding: "8px 12px" }}>
+                          <span style={{ background: CATEGORY_LABELS[a.category]?.color + "18", color: CATEGORY_LABELS[a.category]?.color, padding: "2px 9px", borderRadius: 20, fontSize: 10, fontWeight: 600 }}>
+                            {CATEGORY_LABELS[a.category]?.label}
+                          </span>
+                        </td>
+                        <td style={{ padding: "8px 12px", textAlign: "center" }}>
+                          <button onClick={() => { setEditRow(i); setAddMode(false); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, marginRight: 4 }}>✏️</button>
+                          <button onClick={() => delAccount(i)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13 }}>🗑️</button>
+                        </td>
+                      </tr>
+                    )
+                  )}
+                  {addMode && (
+                    <tr style={{ background: "#f8fffe", borderBottom: "1px solid #f0f2f5" }}>
+                      <td style={{ padding: "8px 12px" }}>
+                        <input value={newAcct.code} onChange={e => setNewAcct({ ...newAcct, code: e.target.value })} placeholder="コード"
+                          style={{ ...inp, fontFamily: "monospace", marginBottom: 0 }} />
+                      </td>
+                      <td style={{ padding: "8px 12px" }}>
+                        <input value={newAcct.name} onChange={e => setNewAcct({ ...newAcct, name: e.target.value })} placeholder="科目名"
+                          style={{ ...inp, marginBottom: 0 }} />
+                      </td>
+                      <td style={{ padding: "8px 12px" }}>
+                        <select value={newAcct.category} onChange={e => setNewAcct({ ...newAcct, category: e.target.value })}
+                          style={{ padding: 6, fontSize: 12, borderRadius: 4, border: `1px solid ${border}`, fontFamily: font }}>
+                          {Object.entries(CATEGORY_LABELS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                        </select>
+                      </td>
+                      <td style={{ padding: "8px 12px", textAlign: "center" }}>
+                        <button onClick={addAccount} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, marginRight: 4 }}>✅</button>
+                        <button onClick={() => setAddMode(false)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13 }}>❌</button>
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+              {!addMode && (
+                <div style={{ padding: 10, borderTop: "1px solid #f0f2f5" }}>
+                  <button onClick={() => { setAddMode(true); setEditRow(null); }}
+                    style={{ width: "100%", padding: "9px 0", borderRadius: 6, border: `1px dashed ${accentLight}`, background: "transparent", color: accentLight, fontSize: 12, cursor: "pointer", fontFamily: font, fontWeight: 600 }}>
+                    ＋ 科目を追加
+                  </button>
+                </div>
+              )}
+            </div>
+            <div style={{ marginTop: 10, fontSize: 10, color: "#bbb" }}>
+              {cur?.isBase ? "💡 基本科目の変更は全業種のAI仕訳に反映されます" : "💡 業種固有科目＋汎用科目の組合せでAIが仕訳判定します"}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+/* ═══════════════════════════════════
+   Main App
+   ═══════════════════════════════════ */
+export default function AutoJournalEntry() {
+  const [industries, setIndustries] = useState(deepClone(DEFAULT_INDUSTRIES));
+  const [industry, setIndustry] = useState("general");
+  const [entries, setEntries] = useState([]);
+  const [processing, setProcessing] = useState(false);
+  const [error, setError] = useState(null);
+  const [previewImage, setPreviewImage] = useState(null);
+  const [editingIdx, setEditingIdx] = useState(null);
+  const [manualText, setManualText] = useState("");
+  const [showMaster, setShowMaster] = useState(false);
+  const fileInputRef = useRef(null);
+
+  const getMerged = k => {
+    const base = industries.general?.accounts || [];
+    if (k === "general") return base;
+    return [...(industries[k]?.accounts || []), ...base];
+  };
+
+  const allAccounts = getMerged(industry);
+
+  const buildSystemPrompt = () => {
+    const accts = getMerged(industry);
+    const prof = industries[industry];
+    const list = accts.map(a => `${a.code}: ${a.name} (${CATEGORY_LABELS[a.category]?.label || a.category})`).join("\n");
+    return `あなたは日本の経理・簿記の専門家です。
+業種: ${prof?.label || "汎用"}
+
+以下の勘定科目一覧から最も適切なものを選び、仕訳を生成してください。
+
+【勘定科目一覧】
+${list}
+
+【ルール】
+1. 領収書/レシートの情報から、日付・金額・取引先・摘要を正確に読み取る
+2. 借方・貸方の勘定科目を上記リストから選択する
+3. 消費税の税区分（10%標準/8%軽減/非課税/不課税）を判定する
+4. インボイス登録番号（T+13桁）があれば抽出する
+5. 複合仕訳（1つの領収書に複数の費目がある場合）にも対応する
+6. 日付が不明な場合は今日の日付（${new Date().toISOString().slice(0, 10)}）を使用
+
+必ず以下のJSON形式のみで回答してください（説明文は不要）：
+{
+  "entries": [
+    {
+      "date": "YYYY-MM-DD",
+      "debit_account": "勘定科目名",
+      "debit_code": "コード",
+      "credit_account": "勘定科目名（通常は現金or預金）",
+      "credit_code": "コード",
+      "amount": 数値,
+      "tax_rate": "10%" or "8%" or "非課税" or "不課税",
+      "tax_amount": 数値,
+      "vendor": "取引先名",
+      "description": "摘要",
+      "invoice_number": "T1234567890123 or null",
+      "confidence": "high" or "medium" or "low",
+      "reasoning": "この科目を選んだ理由"
+    }
+  ]
+}`;
+  };
+
+  const callAPI = async content => {
+    setProcessing(true); setError(null);
+    try {
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 2000, system: buildSystemPrompt(), messages: [{ role: "user", content }] }),
+      });
+      if (!res.ok) throw new Error(`API Error: ${res.status}`);
+      const data = await res.json();
+      const text = data.content.filter(b => b.type === "text").map(b => b.text).join("");
+      const parsed = JSON.parse(text.replace(/```json|```/g, "").trim());
+      if (parsed.entries?.length) setEntries(prev => [...prev, ...parsed.entries.map((e, i) => ({ ...e, id: Date.now() + i }))]);
+    } catch (err) { setError(err.message); }
+    finally { setProcessing(false); }
+  };
+
+  const handleImage = useCallback(async e => {
+    const file = e.target.files?.[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async ev => {
+      setPreviewImage(ev.target.result);
+      await callAPI([
+        { type: "image", source: { type: "base64", media_type: file.type || "image/jpeg", data: ev.target.result.split(",")[1] } },
+        { type: "text", text: "この領収書/レシートの内容を読み取り、仕訳を生成してください。" },
+      ]);
+    };
+    reader.readAsDataURL(file);
+  }, [industry, industries]);
+
+  const handleManual = async () => {
+    if (!manualText.trim()) return;
+    await callAPI([{ type: "text", text: `以下の取引内容から仕訳を生成してください：\n${manualText}` }]);
+    setManualText("");
+  };
+
+  const updateEntry = (id, f, v) => setEntries(prev => prev.map(e => e.id === id ? { ...e, [f]: v } : e));
+  const removeEntry = id => setEntries(prev => prev.filter(e => e.id !== id));
+
+  const exportCSV = () => {
+    const h = "日付,借方コード,借方科目,貸方コード,貸方科目,金額,税区分,消費税額,取引先,摘要,インボイス番号";
+    const rows = entries.map(e => `${e.date},${e.debit_code},${e.debit_account},${e.credit_code},${e.credit_account},${e.amount},${e.tax_rate},${e.tax_amount||0},${e.vendor},${e.description},${e.invoice_number||""}`);
+    const blob = new Blob(["\uFEFF" + [h, ...rows].join("\n")], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    Object.assign(document.createElement("a"), { href: url, download: `仕訳帳_${new Date().toISOString().slice(0,10)}.csv` }).click();
+    URL.revokeObjectURL(url);
+  };
+
+  const total = entries.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+
+  const Conf = ({ level }) => {
+    const m = { high: { bg: "#e8f5e9", c: "#2e7d32", l: "高" }, medium: { bg: "#fff8e1", c: "#f57f17", l: "中" }, low: { bg: "#fce4ec", c: "#c62828", l: "低" } };
+    const s = m[level] || m.low;
+    return <span style={{ background: s.bg, color: s.c, padding: "2px 9px", borderRadius: 20, fontSize: 10, fontWeight: 700 }}>確度:{s.l}</span>;
+  };
+
+  return (
+    <div style={{ fontFamily: font, background: bg, minHeight: "100vh", padding: "20px 14px" }}>
+      {showMaster && <MasterPanel industries={industries} setIndustries={setIndustries} onClose={() => setShowMaster(false)} />}
+
+      <div style={{ maxWidth: 960, margin: "0 auto" }}>
+        {/* Header */}
+        <div style={{ background: `linear-gradient(135deg, ${accent}, #2c3e50)`, borderRadius: 14, padding: "22px 26px", color: "#fff", marginBottom: 18 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ fontSize: 28 }}>📒</span>
+              <div>
+                <h1 style={{ margin: 0, fontSize: 19, fontWeight: 800, letterSpacing: 1 }}>AI自動仕訳システム</h1>
+                <p style={{ margin: "2px 0 0", fontSize: 11, opacity: 0.8 }}>多業種対応｜科目マスタ管理機能付き</p>
+              </div>
+            </div>
+            <button onClick={() => setShowMaster(true)}
+              style={{ padding: "9px 18px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.5)", background: "rgba(255,255,255,0.12)", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: font }}>
+              ⚙️ 科目マスタ管理
+            </button>
+          </div>
+        </div>
+
+        {/* Industry */}
+        <div style={{ background: cardBg, borderRadius: 10, padding: "14px 18px", marginBottom: 14, border: `1px solid ${border}` }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <h3 style={{ margin: 0, fontSize: 12, color: accent, fontWeight: 700 }}>業種選択</h3>
+            <span style={{ fontSize: 10, color: "#aaa" }}>科目数: {getMerged(industry).length}</span>
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+            {Object.entries(industries).map(([k, p]) => (
+              <button key={k} onClick={() => setIndustry(k)}
+                style={{ padding: "6px 12px", borderRadius: 6, border: industry === k ? `2px solid ${accentLight}` : `1px solid ${border}`, background: industry === k ? "#eaf2f8" : "#fff", color: industry === k ? accent : "#555", fontWeight: industry === k ? 700 : 400, fontSize: 11, cursor: "pointer", fontFamily: font }}>
+                {p.icon} {p.label}
+              </button>
+            ))}
+          </div>
+          {industry !== "general" && industries[industry]?.accounts?.length > 0 && (
+            <div style={{ marginTop: 6, fontSize: 10, color: "#999" }}>
+              ＋固有科目: {industries[industry].accounts.map(a => a.name).join("、")}
+            </div>
+          )}
+        </div>
+
+        {/* Input */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 14 }}>
+          <div style={{ background: cardBg, borderRadius: 10, padding: 18, border: `1px solid ${border}`, textAlign: "center" }}>
+            <h3 style={{ margin: "0 0 8px", fontSize: 12, color: accent, fontWeight: 700 }}>📷 領収書スキャン</h3>
+            <input ref={fileInputRef} type="file" accept="image/*" capture="environment" onChange={handleImage} style={{ display: "none" }} />
+            <div onClick={() => fileInputRef.current?.click()}
+              style={{ border: `2px dashed ${accentLight}`, borderRadius: 8, padding: previewImage ? 6 : 24, cursor: "pointer", background: "#f0f6fa", minHeight: 90, display: "flex", alignItems: "center", justifyContent: "center" }}>
+              {previewImage ? <img src={previewImage} style={{ maxWidth: "100%", maxHeight: 160, borderRadius: 6 }} /> : (
+                <div><div style={{ fontSize: 28, marginBottom: 4 }}>📄</div><div style={{ fontSize: 11, color: "#888" }}>クリックで領収書画像をアップロード</div></div>
+              )}
+            </div>
+          </div>
+          <div style={{ background: cardBg, borderRadius: 10, padding: 18, border: `1px solid ${border}` }}>
+            <h3 style={{ margin: "0 0 8px", fontSize: 12, color: accent, fontWeight: 700 }}>✏️ テキスト入力</h3>
+            <textarea value={manualText} onChange={e => setManualText(e.target.value)}
+              placeholder={"例：\n5月19日 ヤマダ電機 USBケーブル 1,980円\n5月18日 タクシー代 2,340円"}
+              style={{ width: "100%", minHeight: 90, borderRadius: 6, border: `1px solid ${border}`, padding: 8, fontSize: 11, fontFamily: font, resize: "vertical", boxSizing: "border-box" }} />
+            <button onClick={handleManual} disabled={processing || !manualText.trim()}
+              style={{ marginTop: 6, width: "100%", padding: "8px 0", borderRadius: 6, border: "none", background: processing ? "#ccc" : accentLight, color: "#fff", fontWeight: 700, fontSize: 12, cursor: processing ? "default" : "pointer", fontFamily: font }}>
+              {processing ? "⏳ AI解析中..." : "🤖 AIで仕訳生成"}
+            </button>
+          </div>
+        </div>
+
+        {processing && (
+          <div style={{ background: "#eaf2f8", borderRadius: 8, padding: 12, textAlign: "center", marginBottom: 14, fontSize: 12, color: accent }}>
+            <span style={{ display: "inline-block", animation: "spin 1s linear infinite", marginRight: 6 }}>⚙️</span>
+            AI が「{industries[industry]?.label}」の科目体系で仕訳を判定中...
+            <style>{`@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}`}</style>
+          </div>
+        )}
+
+        {error && <div style={{ background: "#fce4ec", borderRadius: 8, padding: 12, marginBottom: 14, color: "#c62828", fontSize: 11 }}>⚠️ {error}</div>}
+
+        {/* Journal */}
+        {entries.length > 0 && (
+          <div style={{ background: cardBg, borderRadius: 10, border: `1px solid ${border}`, marginBottom: 14, overflow: "hidden" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 18px", borderBottom: `1px solid ${border}` }}>
+              <h3 style={{ margin: 0, fontSize: 13, color: accent, fontWeight: 700 }}>📋 仕訳帳（{entries.length}件）</h3>
+              <div style={{ display: "flex", gap: 5 }}>
+                <button onClick={exportCSV} style={{ padding: "4px 10px", borderRadius: 5, border: `1px solid ${accentLight}`, background: "#fff", color: accentLight, fontSize: 10, fontWeight: 600, cursor: "pointer", fontFamily: font }}>📥 CSV</button>
+                <button onClick={() => setEntries([])} style={{ padding: "4px 10px", borderRadius: 5, border: "1px solid #e74c3c", background: "#fff", color: "#e74c3c", fontSize: 10, fontWeight: 600, cursor: "pointer", fontFamily: font }}>🗑️ 全消去</button>
+              </div>
+            </div>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                <thead>
+                  <tr style={{ background: "#f0f4f8", fontSize: 10, color: "#555" }}>
+                    <th style={{ padding: "8px 10px", textAlign: "left" }}>日付</th>
+                    <th style={{ padding: "8px 10px", textAlign: "left" }}>借方科目</th>
+                    <th style={{ padding: "8px 10px", textAlign: "left" }}>貸方科目</th>
+                    <th style={{ padding: "8px 10px", textAlign: "right" }}>金額</th>
+                    <th style={{ padding: "8px 10px" }}>税区分</th>
+                    <th style={{ padding: "8px 10px" }}>取引先</th>
+                    <th style={{ padding: "8px 10px" }}>摘要</th>
+                    <th style={{ padding: "8px 10px" }}>確度</th>
+                    <th style={{ padding: "8px 6px", width: 50 }}></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {entries.map(en => (
+                    <tr key={en.id} style={{ borderBottom: "1px solid #f0f2f5", background: en.confidence === "low" ? "#fff5f5" : en.confidence === "medium" ? "#fffdf5" : "#fff" }}>
+                      <td style={{ padding: "7px 10px", whiteSpace: "nowrap" }}>
+                        {editingIdx === en.id ? <input type="date" value={en.date} onChange={e => updateEntry(en.id, "date", e.target.value)} style={{ width: 105, fontSize: 10, fontFamily: font }} /> : en.date}
+                      </td>
+                      <td style={{ padding: "7px 10px" }}>
+                        {editingIdx === en.id ? (
+                          <select value={en.debit_account} onChange={e => updateEntry(en.id, "debit_account", e.target.value)} style={{ fontSize: 10, fontFamily: font, maxWidth: 115 }}>
+                            {allAccounts.map((a, i) => <option key={i} value={a.name}>{a.name}</option>)}
+                          </select>
+                        ) : <span style={{ fontWeight: 600 }}>{en.debit_account}</span>}
+                      </td>
+                      <td style={{ padding: "7px 10px" }}>
+                        {editingIdx === en.id ? (
+                          <select value={en.credit_account} onChange={e => updateEntry(en.id, "credit_account", e.target.value)} style={{ fontSize: 10, fontFamily: font, maxWidth: 115 }}>
+                            {allAccounts.map((a, i) => <option key={i} value={a.name}>{a.name}</option>)}
+                          </select>
+                        ) : en.credit_account}
+                      </td>
+                      <td style={{ padding: "7px 10px", textAlign: "right", fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>¥{Number(en.amount||0).toLocaleString()}</td>
+                      <td style={{ padding: "7px 10px", fontSize: 10 }}>{en.tax_rate}</td>
+                      <td style={{ padding: "7px 10px", fontSize: 10 }}>{en.vendor}</td>
+                      <td style={{ padding: "7px 10px", fontSize: 10, maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={en.description}>{en.description}</td>
+                      <td style={{ padding: "7px 10px" }}><Conf level={en.confidence} /></td>
+                      <td style={{ padding: "7px 6px" }}>
+                        <button onClick={() => setEditingIdx(editingIdx === en.id ? null : en.id)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, padding: 1 }}>{editingIdx === en.id ? "✅" : "✏️"}</button>
+                        <button onClick={() => removeEntry(en.id)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, padding: 1 }}>🗑️</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr style={{ background: "#f0f4f8", fontWeight: 700 }}>
+                    <td colSpan={3} style={{ padding: 10, textAlign: "right" }}>合計</td>
+                    <td style={{ padding: 10, textAlign: "right", fontVariantNumeric: "tabular-nums", color: accent, fontSize: 13 }}>¥{total.toLocaleString()}</td>
+                    <td colSpan={5} />
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+            {entries.some(e => e.reasoning) && (
+              <div style={{ padding: "8px 18px 12px", borderTop: `1px solid ${border}` }}>
+                <details>
+                  <summary style={{ fontSize: 10, color: "#888", cursor: "pointer", fontWeight: 600 }}>💡 AI判定理由</summary>
+                  <div style={{ marginTop: 6 }}>
+                    {entries.filter(e => e.reasoning).map(e => (
+                      <div key={e.id} style={{ fontSize: 10, color: "#666", padding: "2px 0", borderBottom: "1px solid #f0f0f0" }}>
+                        <strong>{e.debit_account}</strong>：{e.reasoning}
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              </div>
+            )}
+          </div>
+        )}
+
+        {entries.length === 0 && !processing && (
+          <div style={{ background: cardBg, borderRadius: 10, border: `1px solid ${border}`, padding: 36, textAlign: "center", color: "#aaa" }}>
+            <div style={{ fontSize: 40, marginBottom: 8 }}>🧾</div>
+            <div style={{ fontSize: 12 }}>領収書をアップロードするか、取引内容をテキスト入力してください</div>
+            <div style={{ fontSize: 10, marginTop: 4 }}>AI が「{industries[industry]?.label}」の科目体系で自動仕訳します</div>
+          </div>
+        )}
+
+        <div style={{ marginTop: 12, fontSize: 9, color: "#bbb", textAlign: "center" }}>
+          ※ AI仕訳は推定結果です。確度「中」「低」は要確認 ｜ CSV出力は弥生会計・freee・マネーフォワード対応
+        </div>
+      </div>
+    </div>
+  );
+}
