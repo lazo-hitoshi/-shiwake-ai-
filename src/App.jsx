@@ -86,12 +86,31 @@ function saveSession(session){sessionStorage.setItem(SESSION_KEY,JSON.stringify(
 function clearSession(){sessionStorage.removeItem(SESSION_KEY);}
 function getPlanLabel(plan){return PLAN_LABELS[plan]||plan;}
 
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+
 async function fetchUsage(token){
   try{
     const res=await fetch(`/api/usage?token=${encodeURIComponent(token)}`);
+    if(res.status===401)return{expired:true};
     if(!res.ok)return null;
-    return await res.json();
+    return{expired:false,data:await res.json()};
   }catch{return null;}
+}
+
+/** 通信エラー・5xx時に1回だけ再試行（デモ時の一時障害対策） */
+async function fetchWithRetry(url,options,retries=2){
+  let lastErr;
+  for(let i=0;i<retries;i++){
+    try{
+      const res=await fetch(url,options);
+      if(res.status>=500&&i<retries-1){await sleep(1200);continue;}
+      return res;
+    }catch(e){
+      lastErr=e;
+      if(i<retries-1)await sleep(1200);
+    }
+  }
+  throw lastErr||new Error("通信エラー");
 }
 
 async function fetchAdminReport(token){
@@ -135,7 +154,7 @@ function UsageProgress({usageInfo}){
   );
 }
 
-function LoginScreen({onLogin}){
+function LoginScreen({onLogin,hint}){
   const[company,setCompany]=useState("");
   const[password,setPassword]=useState("");
   const[error,setError]=useState("");
@@ -161,6 +180,7 @@ function LoginScreen({onLogin}){
           <h1 style={{margin:0,fontSize:22,color:accent,fontWeight:800}}>AI自動仕訳システム</h1>
           <p style={{margin:"8px 0 0",fontSize:13,color:"#888"}}>会社名とパスワードでログイン</p>
         </div>
+        {hint&&<div style={{background:"#fff8e1",border:"1px solid #ffe082",borderRadius:8,padding:"10px 12px",marginBottom:16,fontSize:12,color:"#6d4c00",lineHeight:1.5}}>💡 {hint}</div>}
         <form onSubmit={submit}>
           <label style={{fontSize:12,fontWeight:600,color:"#555",display:"block",marginBottom:6}}>会社名</label>
           <input value={company} onChange={e=>setCompany(e.target.value)} placeholder="例：A商事" required
@@ -559,26 +579,51 @@ export default function App(){
   const[error,setError]=useState(null);
   const[showMaster,setShowMaster]=useState(false);
   const[csvModal,setCsvModal]=useState(null);
+  const[sessionReady,setSessionReady]=useState(!loadSession());
+  const[connectionOk,setConnectionOk]=useState(false);
+  const[loginHint,setLoginHint]=useState(null);
+  const[analyzing,setAnalyzing]=useState(false);
 
   const user=session?.user;
   const usageInfo=usageFromApi(usageData,user);
 
   const refreshUsage=useCallback(async tok=>{
-    if(!tok)return;
+    if(!tok)return null;
     const u=await fetchUsage(tok);
-    if(u)setUsageData(u);
+    if(u?.expired)return{expired:true};
+    if(u?.data){setUsageData(u.data);setConnectionOk(true);}
+    return u;
+  },[]);
+
+  const handleSessionExpired=useCallback((msg)=>{
+    clearSession();
+    setSession(null);
+    setUsageData(null);
+    setConnectionOk(false);
+    setSessionReady(true);
+    setLoginHint(msg||"セッションの有効期限が切れました。紹介の直前に再ログインしてください。");
+    setStep(1);
+    setEntries([]);
+    setSubMode(null);
+    setImageData(null);
+    setShowAdmin(false);
+    setError(null);
   },[]);
 
   const handleLogin=s=>{
     setSession(s);
+    setLoginHint(null);
     setIndustry(s.user?.industry||"general");
-    refreshUsage(s.token);
+    setSessionReady(true);
+    refreshUsage(s.token).then(r=>{if(r?.expired)handleSessionExpired();});
   };
 
   const handleLogout=()=>{
     clearSession();
     setSession(null);
     setUsageData(null);
+    setConnectionOk(false);
+    setSessionReady(true);
     setStep(1);
     setEntries([]);
     setSubMode(null);
@@ -587,8 +632,17 @@ export default function App(){
   };
 
   useEffect(()=>{
-    if(session?.token)refreshUsage(session.token);
-  },[session?.token,refreshUsage]);
+    if(!session?.token){
+      setSessionReady(true);
+      setConnectionOk(false);
+      return;
+    }
+    setSessionReady(false);
+    refreshUsage(session.token).then(r=>{
+      if(r?.expired)handleSessionExpired();
+      setSessionReady(true);
+    });
+  },[session?.token,refreshUsage,handleSessionExpired]);
 
   useEffect(()=>{
     if(session?.user?.industry)setIndustry(session.user.industry);
@@ -611,19 +665,23 @@ export default function App(){
     return`あなたは日本の経理・簿記の専門家です。業種:${prof?.label||"汎用"}\n以下の勘定科目一覧から最適なものを選び仕訳を生成。\n【勘定科目一覧】\n${list}\n【ルール】1.日付・金額・取引先・摘要を正確に読取 2.借方・貸方を上記から選択 3.消費税区分判定 4.インボイス番号抽出 5.複合仕訳対応 6.日付不明なら${new Date().toISOString().slice(0,10)}\n【出力形式・厳守】説明文・挨拶・マークダウンは禁止。以下のJSONオブジェクト1つだけを出力（前後に文字を付けない）：\n{"entries":[{"date":"YYYY-MM-DD","debit_account":"科目名","debit_code":"コード","credit_account":"科目名","credit_code":"コード","amount":数値,"tax_rate":"10%"or"8%"or"非課税"or"不課税","tax_amount":数値,"vendor":"取引先","description":"摘要","invoice_number":"T番号ornull","confidence":"high"or"medium"or"low","reasoning":"理由"}]}`;
   };
 
-  // ★ サーバー経由でAPI呼出し（APIキーはサーバー側で管理）
+  // ★ サーバー経由でAPI呼出し（JSON解析・再試行はサーバー側）
   const callAPI=async content=>{
+    if(!sessionReady){
+      setError("接続を確認しています。少し待ってからお試しください。");
+      return;
+    }
     if(usageInfo.reached){
       setError(LIMIT_MSG_DETAIL);
       setStep(2);
       setSubMode(null);
       return;
     }
-    setStep(3);setError(null);
+    setStep(3);setError(null);setAnalyzing(true);
     try{
       const body={system:buildPrompt(),messages:[{role:'user',content}]};
       if(session?.token)body.token=session.token;
-      const res=await fetch('/api/chat',{
+      const res=await fetchWithRetry('/api/chat',{
         method:'POST',
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify(body),
@@ -633,27 +691,30 @@ export default function App(){
         if(data.usage)setUsageData(data.usage);
         const msg=data.error||`Error ${res.status}`;
         if(res.status===401){
-          setError(msg);
-          setStep(2);
-          setSubMode(null);
+          handleSessionExpired(msg);
           return;
         }
         throw new Error(msg);
       }
-      if(!data.content?.length)throw new Error("AIの応答を取得できませんでした");
-      const text=data.content.filter(b=>b.type==='text').map(b=>b.text).join('');
-      const newEntries=parseEntriesFromAI(text);
+      let newEntries=data.entries;
+      if(!newEntries?.length){
+        const text=data.content?.filter(b=>b.type==='text').map(b=>b.text).join('');
+        newEntries=parseEntriesFromAI(text);
+      }
+      if(!newEntries?.length)throw new Error("仕訳データを取得できませんでした");
       setEntries(prev=>[...prev,...newEntries.map((e,i)=>({...e,id:Date.now()+i}))]);
       if(data.usage)setUsageData(data.usage);
       else if(session?.token)await refreshUsage(session.token);
       setStep(4);
     }catch(err){
-      const msg=/JSON|SyntaxError|読み取れません/i.test(err.message)
-        ?"AIの応答を読み取れませんでした。領収書を明るく・はっきり撮影して再度お試しください。"
-        :err.message;
+      const msg=/JSON|SyntaxError|読み取れ|422|仕訳/i.test(String(err.message))
+        ?"仕訳の生成に失敗しました。領収書を明るく・はっきり撮影して再度お試しください。"
+        :(err.message||"通信エラーが発生しました。もう一度お試しください。");
       setError(msg);
       setStep(2);
       setSubMode(null);
+    }finally{
+      setAnalyzing(false);
     }
   };
 
@@ -666,7 +727,15 @@ export default function App(){
     shareOrSaveCSV(buildCSV(entries),filename,setCsvModal);
   };
 
-  if(!session)return<LoginScreen onLogin={handleLogin}/>;
+  if(!session)return<LoginScreen onLogin={handleLogin} hint={loginHint}/>;
+
+  if(!sessionReady){
+    return(
+      <div style={{fontFamily:font,background:bg,minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+        <p style={{color:"#666",fontSize:14}}>接続を確認しています…</p>
+      </div>
+    );
+  }
 
   return(
     <div style={{fontFamily:font,background:bg,minHeight:"100vh",padding:"20px 14px"}}>
@@ -678,6 +747,7 @@ export default function App(){
           <div>
             <h1 style={{margin:0,fontSize:22,color:accent,fontWeight:800}}>📒 AI自動仕訳システム</h1>
             <p style={{margin:"4px 0 0",fontSize:12,color:"#999"}}>領収書を取り込むだけで、AIが自動で仕訳帳を作成します</p>
+            {connectionOk&&<p style={{margin:"6px 0 0",fontSize:11,color:"#2e7d32",fontWeight:600}}>✓ サーバー接続OK（紹介の準備完了）</p>}
           </div>
           <div style={{fontSize:12,color:"#555",textAlign:"right",lineHeight:1.8}}>
             <div><strong>{user?.company}</strong> 様｜{getPlanLabel(user?.plan)}</div>
@@ -689,7 +759,11 @@ export default function App(){
           </div>
         </div>
         <StepBar current={step}/>
-        {error&&<div style={{background:"#fce4ec",borderRadius:10,padding:14,marginBottom:16,color:"#c62828",fontSize:13,textAlign:"center",maxWidth:700,margin:"0 auto 16px"}}>⚠️ {error}{!error.includes("使い切り")&&error!=="再ログイン"&&<><br/><span style={{fontSize:12}}>もう一度お試しください</span></>}</div>}
+        {connectionOk&&step<=2&&!error&&<div style={{background:"#e8f5e9",borderRadius:10,padding:"10px 14px",marginBottom:16,color:"#2e7d32",fontSize:12,maxWidth:700,margin:"0 auto 16px",lineHeight:1.5}}>
+          <strong>紹介の直前：</strong>一度ログアウト→再ログインすると、セッション切れを防げます。明るい場所で領収書全体が写る写真がおすすめです。
+        </div>}
+        {error&&<div style={{background:"#fce4ec",borderRadius:10,padding:14,marginBottom:16,color:"#c62828",fontSize:13,textAlign:"center",maxWidth:700,margin:"0 auto 16px"}}>⚠️ {error}{!error.includes("使い切り")&&!error.includes("再ログイン")&&<><br/><span style={{fontSize:12}}>もう一度お試しください</span></>}</div>}
+        {analyzing&&step===3&&<div style={{textAlign:"center",color:"#666",fontSize:13,marginBottom:12}}>AIが領収書を読み取っています（30秒ほどかかることがあります）…</div>}
         {step===1&&<Step1 industries={industries} industry={industry} setIndustry={setIndustry} onNext={()=>{setStep(2);setSubMode(null);}} onOpenMaster={()=>setShowMaster(true)}/>}
         {step===2&&!subMode&&<Step2Upload onImageSelected={handleImageSelected} onTextMode={()=>setSubMode("text")} onBack={()=>setStep(1)} limitReached={usageInfo.reached} usageInfo={usageInfo}/>}
         {step===2&&subMode==="text"&&<Step2Text onSubmit={handleTextSubmit} onBack={()=>setSubMode(null)} limitReached={usageInfo.reached} usageInfo={usageInfo}/>}

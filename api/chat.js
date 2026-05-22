@@ -7,6 +7,65 @@ import {
   LIMIT_MSG_API,
 } from './lib/usageStore.js';
 import { checkAndReserve, incrementUsage } from './lib/usage.js';
+import {
+  parseEntriesFromAI,
+  extractTextFromAnthropic,
+} from './lib/parseEntries.js';
+
+const PARSE_RETRY_USER =
+  '前の回答は無効です。説明・挨拶・マークダウンは一切不要。{"entries":[...]} 形式のJSONオブジェクト1つだけを出力してください。';
+
+async function callAnthropic(apiKey, system, messages) {
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 2000,
+      system,
+      messages,
+    }),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    const err = new Error(`Anthropic API Error: ${response.status}`);
+    err.status = response.status;
+    err.detail = errText;
+    throw err;
+  }
+
+  return response.json();
+}
+
+function parseWithRetry(apiKey, system, messages) {
+  return (async () => {
+    let data = await callAnthropic(apiKey, system, messages);
+    let text = extractTextFromAnthropic(data);
+
+    try {
+      const entries = parseEntriesFromAI(text);
+      return { entries, data };
+    } catch {
+      /* retry once with stricter instruction */
+    }
+
+    const retryMessages = [
+      ...messages,
+      { role: 'assistant', content: text || '（応答なし）' },
+      { role: 'user', content: PARSE_RETRY_USER },
+    ];
+
+    data = await callAnthropic(apiKey, system, retryMessages);
+    text = extractTextFromAnthropic(data);
+    const entries = parseEntriesFromAI(text);
+    return { entries, data };
+  })();
+}
 
 export default async function handler(req, res) {
   setCors(res, 'POST, OPTIONS');
@@ -63,29 +122,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 2000,
-        system,
-        messages,
-      }),
-    });
-
-    if (!response.ok) {
-      const errText = await response.text();
-      return res
-        .status(response.status)
-        .json({ error: `Anthropic API Error: ${response.status}`, detail: errText });
-    }
-
-    const data = await response.json();
+    const { entries } = await parseWithRetry(apiKey, system, messages);
 
     let usage = null;
     if (usageUser) {
@@ -94,8 +131,28 @@ export default async function handler(req, res) {
       usage = await incrementUsage(legacyReservation);
     }
 
-    return res.status(200).json({ ...data, usage });
+    return res.status(200).json({ entries, usage });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    if (err.status) {
+      return res.status(err.status).json({
+        error: err.message,
+        detail: err.detail,
+      });
+    }
+
+    const parseFailed =
+      err.message?.includes('JSON') ||
+      err.message?.includes('読み取れ') ||
+      err.message?.includes('空です');
+
+    if (parseFailed) {
+      return res.status(422).json({
+        error:
+          '仕訳データの生成に失敗しました。領収書を明るく・はっきり撮影して再度お試しください。',
+        retryable: true,
+      });
+    }
+
+    return res.status(500).json({ error: err.message || '処理に失敗しました' });
   }
 }
