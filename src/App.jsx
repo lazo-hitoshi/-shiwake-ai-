@@ -42,6 +42,30 @@ const cardBg = "#ffffff";
 const bdr = "#dde3ea";
 function deepClone(o){return JSON.parse(JSON.stringify(o))}
 
+/** AI応答から仕訳JSONを抽出（説明文が混ざっても解析） */
+function parseEntriesFromAI(text){
+  if(!text?.trim())throw new Error("AIの応答が空です");
+  const cleaned=text.replace(/```json\s*/gi,"").replace(/```/g,"").trim();
+
+  const extract=(raw)=>{
+    const p=JSON.parse(raw);
+    if(p?.entries?.length)return p.entries;
+    if(Array.isArray(p)&&p.length)return p;
+    throw new Error("no entries");
+  };
+
+  try{return extract(cleaned);}catch{/* next */}
+
+  const block=cleaned.match(/\{[\s\S]*"entries"\s*:\s*\[[\s\S]*\]\s*\}/);
+  if(block){try{return extract(block[0]);}catch{/* next */}}
+
+  const s=cleaned.indexOf("{");
+  const e=cleaned.lastIndexOf("}");
+  if(s>=0&&e>s){try{return extract(cleaned.slice(s,e+1));}catch{/* next */}}
+
+  throw new Error("AIの応答をJSONとして読み取れませんでした");
+}
+
 /* ═══ Auth & usage (server-side) ═══ */
 const SESSION_KEY="shiwake_session";
 const PLAN_LABELS={
@@ -584,7 +608,7 @@ export default function App(){
   const buildPrompt=()=>{
     const accts=getMerged(industry);const prof=industries[industry];
     const list=accts.map(a=>`${a.code}:${a.name}(${CATEGORY_LABELS[a.category]?.label})`).join("\n");
-    return`あなたは日本の経理・簿記の専門家です。業種:${prof?.label||"汎用"}\n以下の勘定科目一覧から最適なものを選び仕訳を生成。\n【勘定科目一覧】\n${list}\n【ルール】1.日付・金額・取引先・摘要を正確に読取 2.借方・貸方を上記から選択 3.消費税区分判定 4.インボイス番号抽出 5.複合仕訳対応 6.日付不明なら${new Date().toISOString().slice(0,10)}\n必ず以下JSON形式のみで回答：\n{"entries":[{"date":"YYYY-MM-DD","debit_account":"科目名","debit_code":"コード","credit_account":"科目名","credit_code":"コード","amount":数値,"tax_rate":"10%"or"8%"or"非課税"or"不課税","tax_amount":数値,"vendor":"取引先","description":"摘要","invoice_number":"T番号ornull","confidence":"high"or"medium"or"low","reasoning":"理由"}]}`;
+    return`あなたは日本の経理・簿記の専門家です。業種:${prof?.label||"汎用"}\n以下の勘定科目一覧から最適なものを選び仕訳を生成。\n【勘定科目一覧】\n${list}\n【ルール】1.日付・金額・取引先・摘要を正確に読取 2.借方・貸方を上記から選択 3.消費税区分判定 4.インボイス番号抽出 5.複合仕訳対応 6.日付不明なら${new Date().toISOString().slice(0,10)}\n【出力形式・厳守】説明文・挨拶・マークダウンは禁止。以下のJSONオブジェクト1つだけを出力（前後に文字を付けない）：\n{"entries":[{"date":"YYYY-MM-DD","debit_account":"科目名","debit_code":"コード","credit_account":"科目名","credit_code":"コード","amount":数値,"tax_rate":"10%"or"8%"or"非課税"or"不課税","tax_amount":数値,"vendor":"取引先","description":"摘要","invoice_number":"T番号ornull","confidence":"high"or"medium"or"low","reasoning":"理由"}]}`;
   };
 
   // ★ サーバー経由でAPI呼出し（APIキーはサーバー側で管理）
@@ -618,12 +642,19 @@ export default function App(){
       }
       if(!data.content?.length)throw new Error("AIの応答を取得できませんでした");
       const text=data.content.filter(b=>b.type==='text').map(b=>b.text).join('');
-      const parsed=JSON.parse(text.replace(/```json|```/g,'').trim());
-      if(parsed.entries?.length)setEntries(prev=>[...prev,...parsed.entries.map((e,i)=>({...e,id:Date.now()+i}))]);
+      const newEntries=parseEntriesFromAI(text);
+      setEntries(prev=>[...prev,...newEntries.map((e,i)=>({...e,id:Date.now()+i}))]);
       if(data.usage)setUsageData(data.usage);
       else if(session?.token)await refreshUsage(session.token);
       setStep(4);
-    }catch(err){setError(err.message);setStep(2);setSubMode(null);}
+    }catch(err){
+      const msg=/JSON|SyntaxError|読み取れません/i.test(err.message)
+        ?"AIの応答を読み取れませんでした。領収書を明るく・はっきり撮影して再度お試しください。"
+        :err.message;
+      setError(msg);
+      setStep(2);
+      setSubMode(null);
+    }
   };
 
   const handleImageSelected=(dataUrl,type)=>{setImageData(dataUrl);setImageType(type);setSubMode("confirm");};
